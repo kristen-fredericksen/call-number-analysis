@@ -83,7 +83,7 @@ A formatted Excel workbook with three sheets:
 
 - [MARC 21 Holdings 852 field](https://www.loc.gov/marc/holdings/hd852.html) -- Library of Congress
 - [LC Classification Outline](https://www.loc.gov/catdir/cpso/lcco/) -- Library of Congress
-- "Understanding normalized call numbers in Analytics" -- Simon Hunt, Ex Libris (2019)
+- [Understanding normalized call numbers in Analytics](https://knowledge.exlibrisgroup.com/Alma/Community_Knowledge/Understanding_Normalized_Call_Numbers_in_Analytics) -- Simon Hunt, Ex Libris Community Knowledge Center (2019)
 
 ## License
 
