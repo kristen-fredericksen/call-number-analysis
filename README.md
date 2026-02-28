@@ -34,7 +34,8 @@ For each call number, the script and skill suggest the correct 852 first indicat
 | -- | Not a call number | `Digital Projector`, `SHELVED UNDER TITLE` |
 
 Additional features:
-- Strips shelving prefixes (OVERSIZE, DOCS, FOLIO, REF, etc.) before classification
+- Strips $k prefixes (OVERSIZE, PERIODICAL, THESIS, DISSERTATION, DOCS, REF, etc.) before classification
+- Flags prefix-only call numbers (e.g., just "Periodical" or "Thesis") for human review
 - Detects equipment, format descriptors, staff notes, and test data in call number fields
 - Reports confidence levels (High, Medium, Low) for each classification
 - Handles consortium data with per-institution breakdowns
