@@ -18,19 +18,20 @@ A standalone skill document containing classification rules, a decision tree, Al
 
 A batch analysis script that implements the skill's classification logic against Excel exports from Alma Analytics. It reads an input spreadsheet, classifies every call number, and produces a formatted output workbook with three sheets: detailed analysis, statistics, and institution breakdown.
 
-## Classification Capabilities
+## Suggested Indicators
 
-The script and skill detect these classification schemes:
+For each call number, the script and skill suggest the correct 852 first indicator based on content analysis:
 
-| Scheme | Indicator | Examples |
-|--------|-----------|----------|
-| Library of Congress (LC) | 0 | `QA76.73.P98`, `E 185 .5 B58` |
-| Dewey Decimal | 1 | `813.54`, `005.133` |
-| National Library of Medicine (NLM) | 2 | `W1`, `QS 504` |
-| Superintendent of Documents (SuDoc) | 3 | `C55.281/2-2:IM 1/2/CD`, `Y 4.J 89/1:` |
-| Shelving control number | 4 | `DVD 2847`, `Video disc 1234`, `Fiche 500` |
-| Library and Archives Canada (LAC) | 7 | `FC3695`, `PS8921.A7` |
-| Not a call number | -- | `Digital Projector`, `SHELVED UNDER TITLE` |
+| Indicator | Scheme | Examples |
+|-----------|--------|----------|
+| 0 | Library of Congress (LC) | `QA76.73.P98`, `E 185 .5 B58` |
+| 1 | Dewey Decimal | `813.54`, `005.133` |
+| 2 | National Library of Medicine (NLM) | `W1`, `QS 504` |
+| 3 | Superintendent of Documents (SuDoc) | `C55.281/2-2:IM 1/2/CD`, `Y 4.J 89/1:` |
+| 4 | Shelving control number | `DVD 2847`, `Video disc 1234`, `Fiche 500` |
+| 7 | Library and Archives Canada (LAC) | `FC3695`, `PS8921.A7` |
+| 8 | Other scheme | Call numbers that don't match any known scheme |
+| -- | Not a call number | `Digital Projector`, `SHELVED UNDER TITLE` |
 
 Additional features:
 - Strips shelving prefixes (OVERSIZE, DOCS, FOLIO, REF, etc.) before classification
