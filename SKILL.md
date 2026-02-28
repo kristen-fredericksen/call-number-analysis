@@ -261,7 +261,7 @@ Source: [MARC 21 Format for Holdings Data: 852](https://www.loc.gov/marc/holding
 | **$$h** | Classification part | The classification portion (e.g., `N620 .F6` for LC) |
 | **$$i** | Item part | Cutter, date, volume (e.g., `A85 2015`) — append to $$h |
 | **$$j** | Shelving control number | Used *instead of* $$h/$$i for indicator 4 |
-| **$$k** | Call number prefix | Shelving prefix (e.g., `FOLIO`, `REF`, `OVERSIZE`) — **ignore for classification** |
+| **$$k** | Call number prefix | Shelving prefix — **ignore for classification** (see Prefixes vs. Schemes below) |
 | **$$l** | Shelving form of title | Used for indicator 5 (title shelving) |
 | **$$m** | Call number suffix | Append after $$i if present |
 | **$$2** | Source of classification | Required when indicator = 7 |
@@ -280,6 +280,38 @@ Permanent Call Number: FOLIO N620 .F6 A85
 2. Otherwise → use $$h + $$i (classification + item)
 3. Always ignore $$k (prefix) for classification purposes
 4. The prefix may appear at the end of normalized call numbers but doesn't affect scheme identification
+
+### Prefixes ($k) vs. Local Classification Schemes (Indicator 8)
+
+Many "gray area" call numbers are actually **$k prefix values** that got concatenated into the display call number field. The key distinction:
+
+**$k prefixes** describe *where* or *how* an item is shelved. They are not classifications — they don't organize materials by subject. Strip them and classify whatever follows.
+
+| Prefix | Meaning | Example in display field | Correct MARC |
+|--------|---------|--------------------------|--------------|
+| REFERENCE, REF | Reference collection | `Reference HD6331 .S7` | `$k Reference $h HD6331 $i .S7` (indicator 0) |
+| OVERSIZE | Oversize shelving | `OVERSIZE G 3860 1994 .H37` | `$k OVERSIZE $h G 3860 1994 $i .H37` (indicator 0) |
+| FOLIO, QUARTO | Size-based shelving | `FOLIO N620 .F6 A85` | `$k FOLIO $h N620 .F6 $i A85` (indicator 0) |
+| PERIODICAL, PER | Periodicals area | `Periodical QA76.73 .P98` | `$k Periodical $h QA76.73 $i .P98` (indicator 0) |
+| THESIS, DISSERTATION | Thesis collection | `Thesis HD6331 .S7` | `$k Thesis $h HD6331 $i .S7` (indicator 0) |
+| SERIAL, SERIALS | Serials area | `Serial QA76 .B3` | `$k Serial $h QA76 $i .B3` (indicator 0) |
+| RESERVE | Course reserves | `Reserve E 185 .5 B58` | `$k Reserve $h E 185 .5 $i B58` (indicator 0) |
+| SPEC | Special collections | `SPEC BX 1758.2 M53` | `$k SPEC $h BX 1758.2 $i M53` (indicator 0) |
+| DOCS | Documents collection | `DOCS Y 1.1/5:108-408` | `$k DOCS $j Y 1.1/5:108-408` (indicator 3) |
+
+**Local classification schemes** (indicator 8, $h) are different — they *classify* materials by subject or category, even if the scheme is simple:
+
+| Call number | Why it's indicator 8, not $k |
+|-------------|-------------------------------|
+| `Fic Adams` | "Fic" classifies the item as fiction; "Adams" is the filing element |
+| `Bio` | Classifies the item as biography |
+| `Easy` | Classifies the item as easy/picture books |
+| `YA` | Classifies the item as young adult |
+| `Juv Fic` | Classifies as juvenile fiction |
+
+**When a prefix appears alone** (e.g., just "Periodical" or "Thesis" with no classification following), the indicator is ambiguous — it could be shelving control (indicator 4) or other scheme (indicator 8). These should be flagged for human review.
+
+**When a prefix is followed by an unclassifiable remainder** (e.g., "Thesis 2019"), the same ambiguity applies. The prefix suggests $k, but the remainder doesn't match a standard classification scheme.
 
 ## Alma Analytics Normalization
 
@@ -501,7 +533,7 @@ AV/media locations fall into three categories with different classification impl
 
 **CUNY periodicals locations (items may use simplified classification or no call number):**
 
-Items in periodicals locations often have "Periodical" or a title abbreviation instead of a standard call number. Per the MARC 852 examples, simplified schemes like `Per` in $h are indicator 8 (other scheme), while shelving forms of title in $l are indicator 5.
+Items in periodicals locations often have "Periodical" or a title abbreviation instead of a standard call number. "Periodical" and "Per" are $k prefix values (see "Prefixes vs. Local Classification Schemes" above). When they appear before a real classification (e.g., `Periodical QA76.73 .P98`), strip them and classify the remainder. When they appear alone, the indicator is ambiguous.
 
 | Code | Institution | Description | Notes |
 |------|-------------|-------------|-------|
@@ -551,7 +583,7 @@ Items in periodicals locations often have "Periodical" or a title abbreviation i
 | SPER0 | City College | Science/Engineering Periodicals (pre-1990) | |
 | PER | York College | Periodicals | |
 
-**Note:** Many periodicals have standard LC call numbers -- the location alone doesn't mean the call number is non-standard. However, if the call number field contains just "Periodical", "Per", or a title abbreviation, that's a simplified scheme (indicator 8) or shelving form of title (indicator 5), not an error.
+**Note:** Many periodicals have standard LC call numbers -- the location alone doesn't mean the call number is non-standard. If the call number field contains "Periodical" or "Per" before a standard classification, it's a $k prefix — strip it and classify the remainder. If the word appears alone, the indicator is ambiguous (see "Prefixes vs. Local Classification Schemes" above).
 
 **Known limitation:** Some SuDoc numbers lack colons (e.g., `A 1.2 F 51/3`). These are structurally indistinguishable from LC call numbers based on content alone. A location code like DOCS or CUSP0 may be the only way to identify them as SuDoc.
 
@@ -566,7 +598,13 @@ START
   │
   ├─ AV/media shelving (DVD/CD/VHS/Video/Fiche + number)? → Shelving control (indicator 4)
   │
-  ├─ [Strip shelving prefixes: OVERSIZE, DOCS, FOLIO, REF, SPEC, etc.]
+  ├─ Entire call number is a $k prefix word (PERIODICAL, THESIS, etc.)?
+  │   → Ambiguous: flag for review (could be indicator 4 or 8)
+  │
+  ├─ [Strip $k prefixes: OVERSIZE, DOCS, FOLIO, REF, SPEC, PERIODICAL,
+  │    THESIS, DISSERTATION, SERIAL, PER, RESERVE, QUARTO, etc.]
+  │   ├─ Remainder classifies? → Use that classification + note prefix
+  │   └─ Remainder does NOT classify? → Ambiguous: flag for review
   │
   ├─ Contains colon (:)? → Likely SUDOC (indicator 3)
   │   └─ If no SuDoc stem pattern, flag for review (may be data entry error)

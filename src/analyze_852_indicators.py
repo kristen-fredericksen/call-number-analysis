@@ -433,37 +433,44 @@ def is_dewey(cn):
 # =============================================================================
 
 # Common shelving prefixes that appear before the actual classification.
-# These are normally in $$k but sometimes get concatenated into $$h or
+# These are MARC 852 $k (call number prefix) values — they describe WHERE
+# or HOW an item is shelved, not WHAT it's classified as.
+# They normally belong in $k but sometimes get concatenated into $h or
 # the Permanent Call Number display field.
-# Sorted longest-first so "REFERENCE" matches before "REF".
+# Sorted longest-first so "REFERENCE" matches before "REF", "PERIODICALS"
+# before "PERIODICAL", etc.
 SHELVING_PREFIXES = [
-    'REFERENCE', 'OVERSIZE', 'RESERVE', 'QUARTO', 'FOLIO', 'SPEC', 'DOCS', 'REF',
+    'PERIODICALS', 'PERIODICAL', 'DISSERTATION', 'REFERENCE', 'OVERSIZE',
+    'RESERVE', 'SERIALS', 'SERIAL', 'THESIS', 'QUARTO', 'FOLIO', 'SPEC',
+    'DOCS', 'PER', 'REF',
 ]
 
 
 def strip_shelving_prefix(cn):
     """
-    Strip known shelving prefixes from the beginning of a call number.
+    Strip known shelving prefixes ($k values) from the beginning of a call number.
 
     Requires the prefix to be followed by a space (word boundary) so that
     "REF" doesn't match inside "REFERENCE" or "RESERVED".
 
-    Returns the call number with the prefix removed, or the original
-    if no prefix is found.
+    Returns: (stripped_cn, prefix_found)
+        - stripped_cn: the call number with the prefix removed, or the original
+        - prefix_found: the prefix that was stripped, or None
 
     Examples:
-        "OVERSIZE G 3860 1994 .H37" → "G 3860 1994 .H37"
-        "DOCS Y 1.1/5:108-408" → "Y 1.1/5:108-408"
-        "E 185 .5 B58" → "E 185 .5 B58" (no prefix, unchanged)
-        "REFERENCE QA76 .B3" → "QA76 .B3" (not "ERENCE QA76 .B3")
+        "OVERSIZE G 3860 1994 .H37" → ("G 3860 1994 .H37", "OVERSIZE")
+        "DOCS Y 1.1/5:108-408" → ("Y 1.1/5:108-408", "DOCS")
+        "E 185 .5 B58" → ("E 185 .5 B58", None)
+        "REFERENCE QA76 .B3" → ("QA76 .B3", "REFERENCE")
+        "Periodical QA76.73 .P98" → ("QA76.73 .P98", "PERIODICAL")
     """
     cn_upper = cn.upper()
     for prefix in SHELVING_PREFIXES:
         if cn_upper.startswith(prefix + ' '):
             rest = cn[len(prefix):].lstrip()
             if rest:
-                return rest
-    return cn
+                return rest, prefix
+    return cn, None
 
 
 # =============================================================================
@@ -493,6 +500,92 @@ def is_lac(cn):
             return True, 'High', 'LAC class PS8000+ (Canadian literature)'
 
     return False, None, None
+
+
+# =============================================================================
+# CLASSIFICATION HELPER
+# =============================================================================
+
+def _classify_call_number(cn_stripped):
+    """
+    Classify a call number string (already stripped of any $k prefix).
+
+    Returns (indicator, scheme, confidence, note) if a classification is
+    found, or None if the pattern is not recognized.
+    """
+    # === SUDOC ===
+    if is_sudoc(cn_stripped):
+        return '3', 'Superintendent of Documents', 'High', 'SuDoc pattern (colon separator)'
+
+    # Y class is always SuDoc (Congressional), never LC
+    if re.match(r'^Y\s*\d', cn_stripped, re.IGNORECASE):
+        return '3', 'Superintendent of Documents', 'High', 'SuDoc Y class (Congressional)'
+
+    # === NLM ===
+    class_letters = extract_class_letters(cn_stripped)
+    if class_letters and re.match(r'^(Q[S-Z]|W[A-Z]?)$', class_letters):
+        if re.match(r'^(Q[S-Z]|W[A-Z]?)\s*\d', cn_stripped):
+            return '2', 'National Library of Medicine', 'High', 'NLM class (QS-QZ or W)'
+
+    # === LAC (Library and Archives Canada) ===
+    is_lac_match, conf, note = is_lac(cn_stripped)
+    if is_lac_match:
+        return '7', 'Library and Archives Canada', conf, note
+
+    # === DEWEY ===
+    is_dew, conf, note = is_dewey(cn_stripped)
+    if is_dew:
+        return '1', 'Dewey Decimal', conf, note
+
+    # === LC CLASSIFICATION ===
+    if class_letters and is_valid_lc_class(class_letters):
+        # CIP/preliminary LC (MLCS pattern)
+        if re.search(r'MLCS\s*\d{4}/', cn_stripped, re.IGNORECASE):
+            return '0', 'Library of Congress', 'Low', 'LC (CIP/preliminary — MLCS number)'
+        # LC with attached cutter (no space between class number and cutter)
+        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}\.[A-Z]\d*', cn_stripped, re.IGNORECASE):
+            return '0', 'Library of Congress', 'High', 'LC with cutter'
+        # LC with cutter (space between class number and cutter)
+        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}(\s*\.\d+)?\s+\.?[A-Z]\d*', cn_stripped, re.IGNORECASE):
+            return '0', 'Library of Congress', 'High', 'LC with cutter'
+        # LC with number + date + cutter
+        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}\s+\d{4}\s+\.?[A-Z]\d*', cn_stripped, re.IGNORECASE):
+            return '0', 'Library of Congress', 'High', 'LC with date and cutter'
+        # LC with decimal but no cutter
+        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}\s*\.\d+', cn_stripped, re.IGNORECASE):
+            return '0', 'Library of Congress', 'Medium', 'LC class with decimal'
+        # Simple LC (just class and number)
+        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}(\s|$)', cn_stripped, re.IGNORECASE):
+            return '0', 'Library of Congress', 'Medium', 'LC class and number'
+
+    # === LOCAL COLLECTION SCHEMES ===
+    is_local, conf, note = is_local_collection_scheme(cn_stripped)
+    if is_local:
+        return '4', 'Shelving control number', conf, note
+
+    # === OTHER AV PATTERNS ===
+    if re.match(r'^(DVD|VHS|CD|VID|TAPE|VIDEO)\s*\d', cn_stripped, re.IGNORECASE):
+        return '4', 'Shelving control number', 'High', 'AV format shelving'
+    if re.match(r'^(Circ|Arch)\s*(CD|DVD|Video|VHS)', cn_stripped, re.IGNORECASE):
+        return '4', 'Shelving control number', 'High', 'AV circulation shelving'
+
+    # === LOCAL SCHEMES ===
+    if re.match(r'^\d{2}\s+[A-Z]\d', cn_stripped):
+        return '7', 'Local scheme', 'Medium', 'Local shelving (2-digit prefix)'
+    if re.match(r'^\d{4}-\d{1,2}-\d{1,2}', cn_stripped):
+        return '7', 'Local scheme', 'High', 'Date-based shelving'
+    if re.match(r'^\d{4,}-\d+', cn_stripped):
+        return '7', 'Local scheme', 'Medium', 'Accession number'
+
+    # === FORMAT/COLLECTION CODES ===
+    if re.match(r'^[A-Z]{2,4}\s+[A-Z]\d', cn_stripped, re.IGNORECASE) and len(cn_stripped.split()[0]) <= 4:
+        return '4', 'Shelving control number', 'Medium', 'Format/collection code'
+
+    # === LOCAL NOTATION ===
+    if re.match(r'^[*#]', cn_stripped):
+        return '7', 'Local scheme', 'Low', 'Local notation'
+
+    return None
 
 
 # =============================================================================
@@ -530,96 +623,35 @@ def categorize_call_number(call_num):
     if is_av_shelving_number(cn):
         return '4', 'Shelving control number', 'High', 'AV format shelving number'
 
+    # === CHECK FOR PREFIX-ONLY CALL NUMBERS ===
+    # Words like "Periodical", "Thesis", "Reference" are $k (call number
+    # prefix) values. When they appear alone with no classification after
+    # them, the indicator is ambiguous.
+    if cn.upper().strip() in SHELVING_PREFIXES:
+        prefix_word = cn.strip()
+        return '8', 'Other scheme', 'Low', (
+            f"Possible $k prefix '{prefix_word}' used as entire call number — "
+            f"could be shelving control (4) or other scheme (8)")
+
     # === STRIP SHELVING PREFIXES ===
-    # Try stripping prefixes (OVERSIZE, DOCS, etc.) for classification.
-    # If a prefix is found, classify based on the stripped version.
-    cn_stripped = strip_shelving_prefix(cn)
+    # Try stripping $k prefixes (OVERSIZE, DOCS, PERIODICAL, THESIS, etc.)
+    # for classification. If a prefix is found, classify the remainder.
+    cn_stripped, prefix_found = strip_shelving_prefix(cn)
 
-    # === SUDOC ===
-    # Check for colon — the strongest single indicator of SuDoc
-    if is_sudoc(cn_stripped):
-        return '3', 'Superintendent of Documents', 'High', 'SuDoc pattern (colon separator)'
+    # Classify the (possibly stripped) call number
+    result = _classify_call_number(cn_stripped)
 
-    # Y class is always SuDoc (Congressional), never LC
-    if re.match(r'^Y\s*\d', cn_stripped, re.IGNORECASE):
-        return '3', 'Superintendent of Documents', 'High', 'SuDoc Y class (Congressional)'
+    if result:
+        indicator, scheme, conf, note = result
+        if prefix_found:
+            note += f" (prefix '{prefix_found}' suggests $k)"
+        return indicator, scheme, conf, note
 
-    # === NLM ===
-    # W and QS-QZ are NLM classes, not LC
-    class_letters = extract_class_letters(cn_stripped)
-    if class_letters and re.match(r'^(Q[S-Z]|W[A-Z]?)$', class_letters):
-        if re.match(r'^(Q[S-Z]|W[A-Z]?)\s*\d', cn_stripped):
-            return '2', 'National Library of Medicine', 'High', 'NLM class (QS-QZ or W)'
-
-    # === LAC (Library and Archives Canada) ===
-    is_lac_match, conf, note = is_lac(cn_stripped)
-    if is_lac_match:
-        return '7', 'Library and Archives Canada', conf, note
-
-    # === DEWEY ===
-    is_dew, conf, note = is_dewey(cn_stripped)
-    if is_dew:
-        return '1', 'Dewey Decimal', conf, note
-
-    # === LC CLASSIFICATION ===
-    if class_letters and is_valid_lc_class(class_letters):
-        # CIP/preliminary LC (MLCS pattern) — detect before normal LC
-        # Example: "PR9499.4 .B MLCS 2002/00057 (P)"
-        if re.search(r'MLCS\s*\d{4}/', cn_stripped, re.IGNORECASE):
-            return '0', 'Library of Congress', 'Low', 'LC (CIP/preliminary — MLCS number)'
-        # LC with attached cutter (no space between class number and cutter)
-        # Handles: "BF723.C5 D495 2002", "HC110.C6 M28", "H1.A4 v.582"
-        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}\.[A-Z]\d*', cn_stripped, re.IGNORECASE):
-            return '0', 'Library of Congress', 'High', 'LC with cutter'
-        # LC with cutter (space between class number and cutter)
-        # Handles: "E 185 .5 B58", "BX 1758.2 M53", "N620 .F6 A85"
-        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}(\s*\.\d+)?\s+\.?[A-Z]\d*', cn_stripped, re.IGNORECASE):
-            return '0', 'Library of Congress', 'High', 'LC with cutter'
-        # LC with number + date + cutter (e.g., "G 3860 1994 .H37")
-        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}\s+\d{4}\s+\.?[A-Z]\d*', cn_stripped, re.IGNORECASE):
-            return '0', 'Library of Congress', 'High', 'LC with date and cutter'
-        # LC with decimal but no cutter
-        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}\s*\.\d+', cn_stripped, re.IGNORECASE):
-            return '0', 'Library of Congress', 'Medium', 'LC class with decimal'
-        # Simple LC (just class and number, with or without space)
-        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}(\s|$)', cn_stripped, re.IGNORECASE):
-            return '0', 'Library of Congress', 'Medium', 'LC class and number'
-
-    # === LOCAL COLLECTION SCHEMES ===
-    # Checked AFTER SuDoc/NLM/LAC/Dewey/LC to avoid catching valid call numbers
-    # like "QA 24" or "HE 20" that match the prefix + number pattern.
-    is_local, conf, note = is_local_collection_scheme(cn_stripped)
-    if is_local:
-        return '4', 'Shelving control number', conf, note
-
-    # === OTHER AV PATTERNS ===
-    if re.match(r'^(DVD|VHS|CD|VID|TAPE|VIDEO)\s*\d', cn_stripped, re.IGNORECASE):
-        return '4', 'Shelving control number', 'High', 'AV format shelving'
-    if re.match(r'^(Circ|Arch)\s*(CD|DVD|Video|VHS)', cn_stripped, re.IGNORECASE):
-        return '4', 'Shelving control number', 'High', 'AV circulation shelving'
-
-    # === LOCAL SCHEMES ===
-    if re.match(r'^\d{2}\s+[A-Z]\d', cn_stripped):
-        return '7', 'Local scheme', 'Medium', 'Local shelving (2-digit prefix)'
-    if re.match(r'^\d{4}-\d{1,2}-\d{1,2}', cn_stripped):
-        return '7', 'Local scheme', 'High', 'Date-based shelving'
-    if re.match(r'^\d{4,}-\d+', cn_stripped):
-        return '7', 'Local scheme', 'Medium', 'Accession number'
-
-    # === TITLE-BASED ===
-    if re.match(r'^(Thesis|MFA\s*(project)?|Dissertation)$', cn_stripped, re.IGNORECASE):
-        return '5', 'Title', 'High', 'Title-based shelving'
-
-    # === FORMAT/COLLECTION CODES ===
-    # Pattern: 2-4 letters + space + letter + digit (no class number between)
-    # This can't be LC because LC always requires digits after the class letters.
-    # Examples: "VC A54" (Video Cassette), "SPEC B12"
-    if re.match(r'^[A-Z]{2,4}\s+[A-Z]\d', cn_stripped, re.IGNORECASE) and len(cn_stripped.split()[0]) <= 4:
-        return '4', 'Shelving control number', 'Medium', 'Format/collection code'
-
-    # === LOCAL NOTATION ===
-    if re.match(r'^[*#]', cn_stripped):
-        return '7', 'Local scheme', 'Low', 'Local notation'
+    # === PREFIX STRIPPED BUT REMAINDER NOT CLASSIFIED ===
+    if prefix_found:
+        return '8', 'Other scheme', 'Low', (
+            f"Possible $k prefix '{prefix_found}' — remainder '{cn_stripped}' "
+            f"not a standard classification. Could be shelving control (4) or other scheme (8)")
 
     # === UNRECOGNIZED ===
     return '8', 'Other scheme', 'Low', 'Pattern not recognized - review recommended'

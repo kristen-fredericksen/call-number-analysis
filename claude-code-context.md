@@ -162,22 +162,22 @@ The Skill and the script should stay in sync — if classification logic changes
 
 - **Colonless SuDoc**: `A 1.2 F 51/3` looks like LC from content alone. Location codes (DOCS, CUSP0) are needed to identify these as SuDoc.
 - **G-schedule colons**: LC numbers like `G1254.N4:2M3` (table notation) will be misclassified as SuDoc. Exceedingly rare.
-- **Indicator 4 vs 8 distinction**: The script doesn't yet fully distinguish between shelving control numbers ($j) and other schemes ($h). See "Open Questions" below.
+- **$k prefix insight (resolved)**: Words like "Periodical", "Thesis", "Reference" are MARC 852 $k (call number prefix) values. When they appear before a real classification, strip them and classify the remainder. When they appear alone or with an unclassifiable remainder, the indicator is ambiguous. See SKILL.md "Prefixes vs. Local Classification Schemes."
+
+## Resolved Questions
+
+1. **Indicator 4 vs 8 vs "not a call number"**: Mostly resolved by the $k prefix insight. Many "gray area" call numbers (Periodical, Thesis, Dissertation, Serial, etc.) are $k prefix values, not classification schemes. The script now strips them and classifies the remainder. Local schemes like "Fic Adams" remain indicator 8.
+
+2. **Indicator 5 (title)**: "Thesis" and "Dissertation" are $k prefixes, not indicator 5. Removed the old Thesis/Dissertation → indicator 5 logic.
+
+3. **Periodicals locations**: Added 45 locations to SKILL.md.
 
 ## Open Questions / Next Session
 
-1. **Indicator 4 vs 8 vs "not a call number" reclassification**: MARC distinguishes between shelving control ($j, arbitrary arrangement) and other scheme ($h, real classification). The script currently conflates some of these. Examples:
-   - "DVD 2847" → indicator 4 ($j) — correct
-   - "Periodical" → currently "not a call number" but may be indicator 8 ($h, simplified classification)
-   - "Fic Adams" → indicator 8 ($h, local classification scheme)
-   - "Digital Projector" → genuinely not a call number
+1. **Prefix-only ambiguity**: When a $k prefix appears alone ("Periodical", "Thesis") or with a non-classification remainder ("Thesis 2019"), the script flags it as ambiguous. Cataloger input would help decide: indicator 4, 8, or something else?
 
-2. **Indicator 5 (title)**: Uses $l (shelving form of title), not $h. The script currently classifies "Thesis" and "Dissertation" as indicator 5, which may be wrong since those are in $h.
+2. **Full LC class list**: The user offered to provide a complete list from Classification Web. The current three-letter class workaround (check if first two letters are valid) works but isn't authoritative.
 
-3. **Periodicals locations**: Not yet added to SKILL.md (47 locations identified).
+3. **Remaining "Other scheme" records**: Worth spot-checking for more patterns after re-running with $k prefix changes.
 
-4. **Update the PR**: The PR to cuny-libraries/claude-skills still has the old SKILL.md. Push the latest version to the fork to update it.
-
-5. **Full LC class list**: The user offered to provide a complete list from Classification Web. The current three-letter class workaround (check if first two letters are valid) works but isn't authoritative.
-
-6. **Remaining "Other scheme" (1,084 records)**: Worth spot-checking to find more patterns.
+4. **Update the PR**: Push latest SKILL.md to the fork for cuny-libraries/claude-skills.
