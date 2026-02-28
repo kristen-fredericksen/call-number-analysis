@@ -1,0 +1,876 @@
+#!/usr/bin/env python3
+"""
+852 First Indicator Analysis Script
+
+Analyzes MARC 852 fields to suggest correct first indicator values based on
+call number content. Developed for CUNY consortium data but applicable to
+any library using LC, Dewey, SuDoc, NLM, or local classification schemes.
+
+Usage:
+    python analyze_852_indicators.py input.xlsx output.xlsx
+
+Input file should have columns:
+    - Permanent Call Number
+    - Permanent Call Number Type
+    - 852 MARC
+    - Normalized Call Number
+    - Institution Name
+    - MMS Id
+
+Output includes suggested indicators, classification types, confidence levels,
+and notes explaining the classification decision.
+
+Author: Developed iteratively with Claude
+Version: 1.0
+"""
+
+import pandas as pd
+import re
+import sys
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+
+# =============================================================================
+# MARC 852 PARSING
+# =============================================================================
+
+def parse_852_marc(marc_field):
+    """
+    Parse 852 MARC field into components.
+    
+    Example input: 852_0 $$a NBC $$b BC001 $$c FOLIO $$h N620 .F6 $$i A85 $$k FOLIO
+    
+    Returns dict with indicators and subfields, or None if input is empty.
+    """
+    if pd.isna(marc_field):
+        return None
+    
+    marc = str(marc_field)
+    result = {'raw': marc, 'subfields': {}}
+    
+    # Extract indicators (852_0, 852__, 852#4, etc.)
+    ind_match = re.match(r'^852([_#0-9])([_#0-9])', marc)
+    if ind_match:
+        ind1, ind2 = ind_match.groups()
+        result['indicator1'] = ind1 if ind1 not in ['_', '#'] else ''
+        result['indicator2'] = ind2 if ind2 not in ['_', '#'] else ''
+    
+    # Extract subfields ($$a, $$b, $$h, $$i, $$k, etc.)
+    subfield_pattern = r'\$\$([a-z0-9])\s*([^$]*)'
+    for match in re.finditer(subfield_pattern, marc, re.IGNORECASE):
+        code = match.group(1).lower()
+        value = match.group(2).strip()
+        if code in result['subfields']:
+            result['subfields'][code] += ' ' + value
+        else:
+            result['subfields'][code] = value
+    
+    return result
+
+
+def get_call_number_from_marc(parsed_marc):
+    """
+    Extract the actual call number from parsed 852, using $$h and $$i (or $$j).
+    
+    IMPORTANT: Ignores $$k (prefix) for classification purposes.
+    The prefix (FOLIO, REF, OVERSIZE, etc.) should not affect scheme identification.
+    
+    Subfield priority:
+    - $$j (shelving control number) - used for indicator 4
+    - $$h + $$i (classification + item) - used for LC, Dewey, etc.
+    """
+    if not parsed_marc:
+        return None
+    
+    subfields = parsed_marc.get('subfields', {})
+    
+    h = subfields.get('h', '')
+    i = subfields.get('i', '')
+    j = subfields.get('j', '')
+    
+    if j:
+        return j.strip()
+    elif h:
+        if i:
+            return f"{h} {i}".strip()
+        return h.strip()
+    
+    return None
+
+
+# =============================================================================
+# VALID LC CLASSIFICATION LETTERS
+# =============================================================================
+
+# LC uses A-Z EXCEPT I, O, W, X, Y
+# - I and O are not used (avoid confusion with 1 and 0)
+# - W is NLM (medicine)
+# - X is not used
+# - Y is SuDoc (Congressional)
+
+LC_VALID_CLASSES = set([
+    # Single letters
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M', 
+    'N', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'Z',
+    # Two-letter subclasses
+    'AC', 'AE', 'AG', 'AI', 'AM', 'AN', 'AP', 'AS', 'AY', 'AZ',
+    'BC', 'BD', 'BF', 'BH', 'BJ', 'BL', 'BM', 'BP', 'BQ', 'BR', 'BS', 'BT', 'BV', 'BX',
+    'CB', 'CC', 'CD', 'CE', 'CJ', 'CN', 'CR', 'CS', 'CT',
+    'DA', 'DB', 'DC', 'DD', 'DE', 'DF', 'DG', 'DH', 'DJ', 'DK', 'DL', 'DP', 'DQ', 'DR', 'DS', 'DT', 'DU', 'DX',
+    'GA', 'GB', 'GC', 'GE', 'GF', 'GN', 'GR', 'GT', 'GV',
+    'HA', 'HB', 'HC', 'HD', 'HE', 'HF', 'HG', 'HJ', 'HM', 'HN', 'HQ', 'HS', 'HT', 'HV', 'HX',
+    'JA', 'JC', 'JF', 'JJ', 'JK', 'JL', 'JN', 'JQ', 'JS', 'JV', 'JX', 'JZ',
+    'KD', 'KE', 'KF', 'KG', 'KH', 'KJ', 'KK', 'KL', 'KN', 'KP', 'KQ', 'KR', 'KS', 'KT', 'KU', 'KV', 'KZ',
+    'LA', 'LB', 'LC', 'LD', 'LE', 'LF', 'LG', 'LH', 'LJ', 'LT',
+    'ML', 'MT',
+    'NA', 'NB', 'NC', 'ND', 'NE', 'NK', 'NX',
+    'PA', 'PB', 'PC', 'PD', 'PE', 'PF', 'PG', 'PH', 'PJ', 'PK', 'PL', 'PM', 'PN', 'PQ', 'PR', 'PS', 'PT', 'PZ',
+    'QA', 'QB', 'QC', 'QD', 'QE', 'QH', 'QK', 'QL', 'QM', 'QP', 'QR',
+    'RA', 'RB', 'RC', 'RD', 'RE', 'RF', 'RG', 'RJ', 'RK', 'RL', 'RM', 'RS', 'RT', 'RV', 'RX', 'RZ',
+    'SB', 'SD', 'SF', 'SH', 'SK',
+    'TA', 'TC', 'TD', 'TE', 'TF', 'TG', 'TH', 'TJ', 'TK', 'TL', 'TN', 'TP', 'TR', 'TS', 'TT', 'TX',
+    'UA', 'UB', 'UC', 'UD', 'UE', 'UF', 'UG', 'UH',
+    'VA', 'VB', 'VC', 'VD', 'VE', 'VF', 'VG', 'VK', 'VM',
+    'ZA'
+])
+
+
+# =============================================================================
+# CLASSIFICATION DETECTION FUNCTIONS
+# =============================================================================
+
+# Exact match values for non-call-number detection (computed once)
+_TEST_VALUES = {
+    'test', 'sample', 'example', 'dummy', 'temp', 'temporary',
+    'xxx', 'zzz', 'tbd', 'tba', 'n/a', 'na', 'none', 'null',
+    'delete', 'remove', 'fix', 'error', 'blank', 'empty'
+}
+
+_FORMAT_ONLY = {
+    'cd rom', 'cd-rom', 'cdrom', 'dvd rom', 'dvd-rom', 'dvdrom',
+    'dvd', 'cd', 'vhs', 'dvd video',
+    'cassette', 'microfilm', 'microfiche', 'filmstrip'
+}
+
+_EQUIPMENT_WORDS = {
+    'projector', 'marker', 'charger', 'adapter', 'cable', 'remote',
+    'headphones', 'speaker', 'tripod', 'screen', 'pointer', 'clicker',
+    'eraser', 'whiteboard', 'easel', 'calculator', 'laptop'
+}
+
+# Pre-compiled regex patterns for non-call-number detection
+_NOT_CN_PATTERNS = [re.compile(p) for p in [
+    # Access/availability notes
+    r'(?i)^access\s*(for|through|to|:)',
+    r'(?i)access[:.]',
+    r'(?i)available\s+(at|in|from|to|on)',
+    r'(?i)users?\s+(only|must|can|may)',
+    r'(?i)(college|university|library)\s+users',
+
+    # Staff instructions
+    r'(?i)see\s+(also|librarian|reference)',
+    r'(?i)ask\s+(at|for|librarian|staff)',
+    r'(?i)check\s+(with|at)',
+    r'(?i)contact\s+',
+    r'(?i)request\s+(from|at|through)',
+    r'(?i)inquire',
+    r'(?i)please\s+',
+    r'(?i)assistance',
+    r'(?i)circulation\s+desk',
+    r'(?i)microforms?\s+desk',
+
+    # Shelving notes
+    r'(?i)\bon\s+reserve',
+    r'(?i)reference\s+(only|desk|room)',
+    r'(?i)non-circulating',
+    r'(?i)in-library\s+use',
+    r'(?i)room\s+use\s+only',
+    r'(?i)does\s+not\s+circulate',
+    r'(?i)\brestricted\b',
+    r'(?i)permission\s+(required|needed)',
+    r'(?i)consult\s+',
+    r'(?i)stored\s+(off-?site|in)',
+    r'(?i)shelved\s+(with|in|at|by|under)',
+    r'(?i)filed\s+(under|with|in)',
+    r'(?i)bound\s+with',
+    r'(?i)located\s+(in|at)',
+    r'(?i)keep\s+at',
+    r'(?i)kept\s+(on|at|in)',
+    r'(?i)use\s+copy\s+in',
+
+    # Cataloging notes
+    r'(?i)cataloged\s+(under|with|as|separately)',
+    r'(?i)classed\s+(with|in)',
+    r'(?i)search\s+under',
+
+    # Status notes
+    r'(?i)superseded',
+    r'(?i)cancelled',
+    r'(?i)withdrawn',
+    r'(?i)\bmissing\b',
+    r'(?i)\blost\b',
+    r'(?i)damaged',
+    r'(?i)not\s+available',
+
+    # ILL/electronic
+    r'(?i)order\s+(from|through)',
+    r'(?i)interlibrary\s+loan',
+    r'(?i)\bill\s+only',
+    r'(?i)online\s+(access|only|version)',
+    r'(?i)electronic\s+(access|version)',
+    r'(?i)e-?resource',
+    r'(?i)\bdatabase\b',
+    r'(?i)website',
+    r'(?i)workstation',
+    r'(?i)^https?://',
+    r'(?i)^www\.',
+
+    # Volume/issue notation without call number
+    r'(?i)^\*\s*(vol|no\.?|v\.|issue|pt\.?|part)',
+
+    # Periodical title + browsing note (no classification, just "go look")
+    r'(?i)current\s+issues',
+
+    # Encoding/placeholder patterns
+    r'(?i)^e-[a-z]{2}---',
+    r'(?i)^[a-z]-[a-z]{2}---',
+]]
+
+_PUNCTUATION_ONLY_RE = re.compile(r'^[\?\.\-\_\*\#]+$')
+
+
+def is_not_a_call_number(cn):
+    """
+    Detect notes, instructions, test data, and other non-call-number data
+    that has been entered in call number fields.
+
+    These should be flagged for cleanup - the data belongs in other subfields
+    like $$z (public note) or $$x (nonpublic note).
+    """
+    cn_lower = cn.lower().strip()
+
+    # Exact match test/placeholder values
+    if cn_lower in _TEST_VALUES:
+        return True
+
+    # Format descriptors WITHOUT numbers (just the format name alone)
+    # "CD ROM" alone = not a call number, but "CD ROM 003" = shelving scheme
+    if cn_lower in _FORMAT_ONLY:
+        return True
+
+    # Equipment and supplies (not information resources at all)
+    if set(cn_lower.split()) & _EQUIPMENT_WORDS and not re.search(r'\d', cn):
+        return True
+
+    # Punctuation-only placeholders
+    if _PUNCTUATION_ONLY_RE.match(cn):
+        return True
+
+    # Pattern-based detection (pre-compiled)
+    for pattern in _NOT_CN_PATTERNS:
+        if pattern.search(cn):
+            return True
+
+    return False
+
+
+def is_av_shelving_number(cn):
+    """
+    Detect AV format shelving numbers.
+    
+    These are call numbers that use media format (CD, DVD, VHS, etc.) 
+    as the primary organization, followed by an accession/control number.
+    
+    Context is important:
+    - "CD ROM" alone = format descriptor, NOT a call number
+    - "CD ROM 003" = shelving number (format + accession number)
+    - "CD 1811" = shelving number (format + number)
+    - "BRL CD ROM 071" = shelving number (collection + format + number)
+    
+    Note: CD and DVD are also valid LC class letters, but LC call numbers
+    have different structure (class + number + cutter, e.g., "CD921 .S65")
+    """
+    # Pattern 1: Simple format + number (CD 1811, DVD 456)
+    if re.match(r'^(CD|DVD|VHS|LP|MC|DAT)\s+\d+(\s|$)', cn, re.IGNORECASE):
+        return True
+
+    # Pattern 2: Format + ROM + number (CD ROM 003, DVD ROM 001)
+    if re.match(r'^(CD|DVD)[\s\-]*(ROM)\s+\d+', cn, re.IGNORECASE):
+        return True
+
+    # Pattern 3: Collection prefix + format (+ optional ROM) + number
+    # Examples: "BRL CD ROM 071", "MUS DVD 015"
+    if re.match(r'^[A-Z]+\s+(CD|DVD)[\s\-]*(ROM)?\s+\d+', cn, re.IGNORECASE):
+        return True
+
+    # Pattern 4: Video + format/disc + number (with optional institution prefix)
+    # Examples: "DSI Video CD 18", "DSI Video DVD 22", "DSI Video VHS 53"
+    #           "City College CWE Video - disc 58", "CohenLib Video disc 110"
+    #           "CWE Video- disc 152", "DSI video VHS 59/DVD 89"
+    if re.search(r'Video[\s\-]*(disc|CD|DVD|VHS)\s*\d+', cn, re.IGNORECASE):
+        return True
+
+    # Pattern 5: Fiche/microfiche + number
+    # Examples: "Fiche 414", "FIche 438", "Fiche 685"
+    if re.match(r'^Fiche\s+\d+', cn, re.IGNORECASE):
+        return True
+
+    return False
+
+
+def is_local_collection_scheme(cn):
+    """
+    Detect local collection schemes with recognizable patterns.
+    
+    These are institution-specific shelving systems that use:
+    - Collection prefix + accession/control number
+    - Often with hyphenated numbers
+    
+    Examples from CUNY:
+    - BRL 200-11, BRL 201-108 (Queens College)
+    - BRLV 201-08 (Queens College - "BRL Video")
+    
+    Returns: (is_match, confidence, note) or (False, None, None)
+    """
+    # Pattern: 2-5 letter prefix + hyphenated number (like BRL 200-11)
+    if re.match(r'^[A-Z]{2,5}\s+\d{2,4}-\d+', cn, re.IGNORECASE):
+        return True, 'Medium', 'Local collection scheme (prefix + hyphenated number)'
+    
+    # Pattern: 2-5 letter prefix + simple number (like BRLV 207)
+    if re.match(r'^[A-Z]{2,5}\s+\d{2,4}(\s|$)', cn, re.IGNORECASE):
+        return True, 'Low', 'Possible local collection scheme (prefix + number)'
+    
+    return False, None, None
+
+
+def extract_class_letters(cn):
+    """Extract leading class letters from a call number."""
+    match = re.match(r'^([A-Z]{1,3})\s*\d', cn, re.IGNORECASE)
+    return match.group(1).upper() if match else None
+
+
+def is_valid_lc_class(letters):
+    """Check if letters are a valid LC classification."""
+    if not letters:
+        return False
+    return letters in LC_VALID_CLASSES
+
+
+def is_sudoc(cn):
+    """
+    Detect SuDoc (Superintendent of Documents) classification.
+
+    The colon (:) is the strongest single indicator of SuDoc. A call number
+    containing a colon is almost always SuDoc. Very rarely, a colon may be
+    a data entry error in another scheme.
+
+    SuDoc pattern: Agency stem + number.number/series + : + item designation
+    Examples: A 1.10:976, Y 4.J 89/1:S 53/5, HE 20.3152:P 94,
+              C55.281/2-2:IM 1/2/CD, D 5.12/2: 6-03.7, GA 1.16/3-3: 996
+    """
+    if ':' not in cn:
+        return False
+
+    # Agency letters + number.anything + colon
+    # Allow slashes, hyphens, digits, letters, and spaces between dot and colon
+    if re.match(r'^[A-Z]{1,4}\s*\d+\.[A-Z0-9\s/\-\.]+:', cn, re.IGNORECASE):
+        return True
+
+    return False
+
+
+def is_dewey(cn):
+    """
+    Detect Dewey Decimal classification.
+    
+    Dewey starts with exactly 3 digits, with several format variations:
+    - 394.26 (with decimal)
+    - 398.2 C198T (decimal + Cutter)
+    - 394 S847G (compact format, no decimal, just Cutter)
+    
+    Note: Three digits repeated (like "102 102") are typically local schemes.
+    
+    Returns: (is_match, confidence, note) or (False, None, None)
+    """
+    # 3 digits with decimal
+    if re.match(r'^\d{3}\.\d+', cn):
+        return True, 'High', 'Dewey with decimal'
+    
+    # 3 digits + Cutter (no decimal)
+    match = re.match(r'^(\d{3})\s+([A-Z]\d+[A-Z]?)(\s|$)', cn, re.IGNORECASE)
+    if match:
+        dewey_num = match.group(1)
+        # Make sure it's not a repeated number (like "102 102")
+        if not cn.startswith(f"{dewey_num} {dewey_num}"):
+            return True, 'High', 'Dewey with Cutter'
+    
+    return False, None, None
+
+
+# =============================================================================
+# SHELVING PREFIX STRIPPING
+# =============================================================================
+
+# Common shelving prefixes that appear before the actual classification.
+# These are normally in $$k but sometimes get concatenated into $$h or
+# the Permanent Call Number display field.
+# Sorted longest-first so "REFERENCE" matches before "REF".
+SHELVING_PREFIXES = [
+    'REFERENCE', 'OVERSIZE', 'RESERVE', 'QUARTO', 'FOLIO', 'DOCS', 'REF',
+]
+
+
+def strip_shelving_prefix(cn):
+    """
+    Strip known shelving prefixes from the beginning of a call number.
+
+    Requires the prefix to be followed by a space (word boundary) so that
+    "REF" doesn't match inside "REFERENCE" or "RESERVED".
+
+    Returns the call number with the prefix removed, or the original
+    if no prefix is found.
+
+    Examples:
+        "OVERSIZE G 3860 1994 .H37" → "G 3860 1994 .H37"
+        "DOCS Y 1.1/5:108-408" → "Y 1.1/5:108-408"
+        "E 185 .5 B58" → "E 185 .5 B58" (no prefix, unchanged)
+        "REFERENCE QA76 .B3" → "QA76 .B3" (not "ERENCE QA76 .B3")
+    """
+    cn_upper = cn.upper()
+    for prefix in SHELVING_PREFIXES:
+        if cn_upper.startswith(prefix + ' '):
+            rest = cn[len(prefix):].lstrip()
+            if rest:
+                return rest
+    return cn
+
+
+# =============================================================================
+# LAC (LIBRARY AND ARCHIVES CANADA) DETECTION
+# =============================================================================
+
+def is_lac(cn):
+    """
+    Detect Library and Archives Canada classification.
+
+    LAC uses two ranges that are structurally identical to LC but not
+    part of the LC schedule:
+    - FC: Canadian history (FC is not a valid LC class)
+    - PS8000+: Canadian literature (PS is valid LC, but 8000+ is LAC)
+
+    Returns: (is_match, confidence, note) or (False, None, None)
+    """
+    # FC + number = LAC Canadian history
+    if re.match(r'^FC\s*\d', cn, re.IGNORECASE):
+        return True, 'High', 'LAC class FC (Canadian history)'
+
+    # PS + number >= 8000 = LAC Canadian literature
+    ps_match = re.match(r'^PS\s*(\d+)', cn, re.IGNORECASE)
+    if ps_match:
+        ps_num = int(ps_match.group(1))
+        if ps_num >= 8000:
+            return True, 'High', 'LAC class PS8000+ (Canadian literature)'
+
+    return False, None, None
+
+
+# =============================================================================
+# MAIN CLASSIFICATION FUNCTION
+# =============================================================================
+
+def categorize_call_number(call_num):
+    """
+    Analyze a call number and suggest the appropriate 852 first indicator.
+    
+    Returns: (indicator, classification_type, confidence, note)
+    
+    Indicator values:
+        0 = Library of Congress
+        1 = Dewey Decimal
+        2 = National Library of Medicine
+        3 = Superintendent of Documents
+        4 = Shelving control number
+        5 = Title
+        7 = Source specified in $2
+        8 = Other scheme
+        N/A = Not a call number (data quality issue)
+        blank = Unknown/missing
+    """
+    if pd.isna(call_num) or not call_num:
+        return 'blank', 'Unknown', 'Low', 'Missing call number'
+
+    cn = str(call_num).strip()
+
+    # === NON-CALL-NUMBERS ===
+    if is_not_a_call_number(cn):
+        return 'N/A', 'Not a call number', 'High', 'Appears to be a note/instruction/test'
+
+    # === AV SHELVING NUMBERS ===
+    if is_av_shelving_number(cn):
+        return '4', 'Shelving control number', 'High', 'AV format shelving number'
+
+    # === STRIP SHELVING PREFIXES ===
+    # Try stripping prefixes (OVERSIZE, DOCS, etc.) for classification.
+    # If a prefix is found, classify based on the stripped version.
+    cn_stripped = strip_shelving_prefix(cn)
+
+    # === SUDOC ===
+    # Check for colon — the strongest single indicator of SuDoc
+    if is_sudoc(cn_stripped):
+        return '3', 'Superintendent of Documents', 'High', 'SuDoc pattern (colon separator)'
+
+    # Y class is always SuDoc (Congressional), never LC
+    if re.match(r'^Y\s*\d', cn_stripped, re.IGNORECASE):
+        return '3', 'Superintendent of Documents', 'High', 'SuDoc Y class (Congressional)'
+
+    # === NLM ===
+    # W and QS-QZ are NLM classes, not LC
+    class_letters = extract_class_letters(cn_stripped)
+    if class_letters and re.match(r'^(Q[S-Z]|W[A-Z]?)$', class_letters):
+        if re.match(r'^(Q[S-Z]|W[A-Z]?)\s*\d', cn_stripped):
+            return '2', 'National Library of Medicine', 'High', 'NLM class (QS-QZ or W)'
+
+    # === LAC (Library and Archives Canada) ===
+    is_lac_match, conf, note = is_lac(cn_stripped)
+    if is_lac_match:
+        return '7', 'Library and Archives Canada', conf, note
+
+    # === DEWEY ===
+    is_dew, conf, note = is_dewey(cn_stripped)
+    if is_dew:
+        return '1', 'Dewey Decimal', conf, note
+
+    # === LC CLASSIFICATION ===
+    if class_letters and is_valid_lc_class(class_letters):
+        # LC with cutter (allow space before decimal in class number)
+        # Handles: "E 185 .5 B58", "BX 1758.2 M53", "N620 .F6 A85"
+        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}(\s*\.\d+)?\s+\.?[A-Z]\d*', cn_stripped):
+            return '0', 'Library of Congress', 'High', 'LC with cutter'
+        # LC with number + date + cutter (e.g., "G 3860 1994 .H37")
+        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}\s+\d{4}\s+\.?[A-Z]\d*', cn_stripped):
+            return '0', 'Library of Congress', 'High', 'LC with date and cutter'
+        # LC with decimal but no cutter
+        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}\s*\.\d+', cn_stripped):
+            return '0', 'Library of Congress', 'Medium', 'LC class with decimal'
+        # Simple LC (just class and number, with or without space)
+        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}(\s|$)', cn_stripped):
+            return '0', 'Library of Congress', 'Medium', 'LC class and number'
+    
+    # === LOCAL COLLECTION SCHEMES ===
+    # Checked AFTER SuDoc/NLM/LAC/Dewey/LC to avoid catching valid call numbers
+    # like "QA 24" or "HE 20" that match the prefix + number pattern.
+    is_local, conf, note = is_local_collection_scheme(cn_stripped)
+    if is_local:
+        return '4', 'Shelving control number', conf, note
+
+    # === OTHER AV PATTERNS ===
+    if re.match(r'^(DVD|VHS|CD|VID|TAPE|VIDEO)\s*\d', cn_stripped, re.IGNORECASE):
+        return '4', 'Shelving control number', 'High', 'AV format shelving'
+    if re.match(r'^(Circ|Arch)\s*(CD|DVD|Video|VHS)', cn_stripped, re.IGNORECASE):
+        return '4', 'Shelving control number', 'High', 'AV circulation shelving'
+
+    # === LOCAL SCHEMES ===
+    if re.match(r'^\d{2}\s+[A-Z]\d', cn_stripped):
+        return '7', 'Local scheme', 'Medium', 'Local shelving (2-digit prefix)'
+    if re.match(r'^\d{4}-\d{1,2}-\d{1,2}', cn_stripped):
+        return '7', 'Local scheme', 'High', 'Date-based shelving'
+    if re.match(r'^\d{4,}-\d+', cn_stripped):
+        return '7', 'Local scheme', 'Medium', 'Accession number'
+
+    # === TITLE-BASED ===
+    if re.match(r'^(Thesis|MFA\s*(project)?|Dissertation)$', cn_stripped, re.IGNORECASE):
+        return '5', 'Title', 'High', 'Title-based shelving'
+
+    # === FORMAT/COLLECTION CODES ===
+    if re.match(r'^[A-Z]{2,4}\s+[A-Z]\d', cn_stripped) and len(cn_stripped.split()[0]) <= 4:
+        return '4', 'Shelving control number', 'Medium', 'Format/collection code'
+
+    # === LOCAL NOTATION ===
+    if re.match(r'^[*#]', cn_stripped):
+        return '7', 'Local scheme', 'Low', 'Local notation'
+
+    # === UNRECOGNIZED ===
+    return '8', 'Other scheme', 'Low', 'Pattern not recognized - review recommended'
+
+
+# =============================================================================
+# EXCEL OUTPUT
+# =============================================================================
+
+def create_excel_output(df, output_path):
+    """Create formatted Excel workbook with analysis results."""
+    
+    wb = Workbook()
+    
+    # Styles
+    header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
+    header_font = Font(bold=True, color='FFFFFF')
+    thin_border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
+    conf_colors = {
+        'High': PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid'),
+        'Medium': PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid'),
+        'Low': PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+    }
+    not_cn_fill = PatternFill(start_color='FF6B6B', end_color='FF6B6B', fill_type='solid')
+    
+    # === SHEET 1: Main data ===
+    ws_data = wb.active
+    ws_data.title = "852 Indicator Analysis"
+    
+    headers = [
+        'Permanent Call Number', 'Extracted Call Number', 'Permanent Call Number Type',
+        '852 MARC', 'Normalized Call Number', 'Institution Name', 'MMS Id',
+        'Suggested Indicator', 'Classification Type', 'Confidence', 'Notes'
+    ]
+    
+    for col, header in enumerate(headers, 1):
+        cell = ws_data.cell(row=1, column=col, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal='center', wrap_text=True)
+        cell.border = thin_border
+    
+    for row_idx, row in df.iterrows():
+        data = [
+            row['Permanent Call Number'], row['Extracted Call Number'],
+            row['Permanent Call Number Type'], row['852 MARC'],
+            row['Normalized Call Number'], row['Institution Name'], row['MMS Id'],
+            row['Suggested Indicator'], row['Classification Type'],
+            row['Confidence'], row['Notes']
+        ]
+        for col_idx, value in enumerate(data, 1):
+            cell = ws_data.cell(row=row_idx + 2, column=col_idx, value=value)
+            cell.border = thin_border
+            if col_idx == 10 and value in conf_colors:
+                cell.fill = conf_colors[value]
+            if col_idx == 9 and value == 'Not a call number':
+                cell.fill = not_cn_fill
+                cell.font = Font(bold=True)
+    
+    col_widths = {
+        'A': 35, 'B': 30, 'C': 25, 'D': 60, 'E': 45,
+        'F': 30, 'G': 20, 'H': 18, 'I': 28, 'J': 12, 'K': 55
+    }
+    for col, width in col_widths.items():
+        ws_data.column_dimensions[col].width = width
+    
+    ws_data.freeze_panes = 'A2'
+    ws_data.auto_filter.ref = f"A1:K{len(df) + 1}"
+    
+    # === SHEET 2: Statistics ===
+    ws_stats = wb.create_sheet("Statistics")
+    
+    summary_indicator = df.groupby(['Suggested Indicator', 'Classification Type']).size().reset_index(name='Count')
+    summary_indicator['Percentage'] = (summary_indicator['Count'] / len(df) * 100).round(2)
+    summary_indicator = summary_indicator.sort_values('Count', ascending=False)
+    
+    summary_confidence = df.groupby('Confidence').size().reset_index(name='Count')
+    summary_confidence['Percentage'] = (summary_confidence['Count'] / len(df) * 100).round(2)
+    
+    summary_institution = df.groupby('Institution Name').size().reset_index(name='Count')
+    summary_institution = summary_institution.sort_values('Count', ascending=False)
+    
+    row = 1
+    ws_stats.cell(row=row, column=1, value="852 First Indicator Analysis - Statistics")
+    ws_stats.cell(row=row, column=1).font = Font(bold=True, size=14)
+    row += 2
+    
+    ws_stats.cell(row=row, column=1, value="Overall Summary")
+    ws_stats.cell(row=row, column=1).font = Font(bold=True, size=12)
+    row += 1
+    ws_stats.cell(row=row, column=1, value="Total Records:")
+    ws_stats.cell(row=row, column=2, value=len(df))
+    row += 1
+    ws_stats.cell(row=row, column=1, value="Records with Extracted Call Number:")
+    ws_stats.cell(row=row, column=2, value=df['Extracted Call Number'].notna().sum())
+    row += 2
+    
+    ws_stats.cell(row=row, column=1, value="By Classification Type")
+    ws_stats.cell(row=row, column=1).font = Font(bold=True, size=12)
+    row += 1
+    
+    for col_idx, header in enumerate(['Suggested Indicator', 'Classification Type', 'Count', 'Percentage'], 1):
+        cell = ws_stats.cell(row=row, column=col_idx, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+    row += 1
+    
+    for _, data_row in summary_indicator.iterrows():
+        ws_stats.cell(row=row, column=1, value=data_row['Suggested Indicator']).border = thin_border
+        ws_stats.cell(row=row, column=2, value=data_row['Classification Type']).border = thin_border
+        ws_stats.cell(row=row, column=3, value=data_row['Count']).border = thin_border
+        cell = ws_stats.cell(row=row, column=4, value=data_row['Percentage'] / 100)
+        cell.number_format = '0.00%'
+        cell.border = thin_border
+        row += 1
+    row += 1
+    
+    ws_stats.cell(row=row, column=1, value="By Confidence Level")
+    ws_stats.cell(row=row, column=1).font = Font(bold=True, size=12)
+    row += 1
+    
+    for col_idx, header in enumerate(['Confidence', 'Count', 'Percentage'], 1):
+        cell = ws_stats.cell(row=row, column=col_idx, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+    row += 1
+    
+    for _, data_row in summary_confidence.iterrows():
+        cell1 = ws_stats.cell(row=row, column=1, value=data_row['Confidence'])
+        cell1.border = thin_border
+        if data_row['Confidence'] in conf_colors:
+            cell1.fill = conf_colors[data_row['Confidence']]
+        ws_stats.cell(row=row, column=2, value=data_row['Count']).border = thin_border
+        cell = ws_stats.cell(row=row, column=3, value=data_row['Percentage'] / 100)
+        cell.number_format = '0.00%'
+        cell.border = thin_border
+        row += 1
+    row += 1
+    
+    ws_stats.cell(row=row, column=1, value="By Institution")
+    ws_stats.cell(row=row, column=1).font = Font(bold=True, size=12)
+    row += 1
+    
+    for col_idx, header in enumerate(['Institution', 'Count'], 1):
+        cell = ws_stats.cell(row=row, column=col_idx, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+    row += 1
+    
+    for _, data_row in summary_institution.iterrows():
+        ws_stats.cell(row=row, column=1, value=data_row['Institution Name']).border = thin_border
+        ws_stats.cell(row=row, column=2, value=data_row['Count']).border = thin_border
+        row += 1
+    
+    ws_stats.column_dimensions['A'].width = 50
+    ws_stats.column_dimensions['B'].width = 30
+    ws_stats.column_dimensions['C'].width = 15
+    ws_stats.column_dimensions['D'].width = 12
+    
+    # === SHEET 3: By Institution ===
+    ws_inst = wb.create_sheet("By Institution")
+    
+    crosstab = pd.crosstab(df['Institution Name'], df['Suggested Indicator'], margins=True, dropna=False)
+    
+    ws_inst.cell(row=1, column=1, value="Classification by Institution")
+    ws_inst.cell(row=1, column=1).font = Font(bold=True, size=14)
+    
+    row = 3
+    ws_inst.cell(row=row, column=1, value="Count by Institution and Suggested Indicator")
+    ws_inst.cell(row=row, column=1).font = Font(bold=True, size=12)
+    row += 1
+    
+    headers = ['Institution'] + [str(c) for c in crosstab.columns]
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws_inst.cell(row=row, column=col_idx, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+    row += 1
+    
+    for inst in crosstab.index:
+        ws_inst.cell(row=row, column=1, value=inst).border = thin_border
+        for col_idx, ind in enumerate(crosstab.columns, 2):
+            ws_inst.cell(row=row, column=col_idx, value=int(crosstab.loc[inst, ind])).border = thin_border
+        row += 1
+    
+    row += 2
+    ws_inst.cell(row=row, column=1, value="Sample 'Other Scheme' and 'Unknown' Entries by Institution")
+    ws_inst.cell(row=row, column=1).font = Font(bold=True, size=12)
+    row += 1
+    ws_inst.cell(row=row, column=1, value="(These may be local schemes that vary by campus)")
+    ws_inst.cell(row=row, column=1).font = Font(italic=True)
+    row += 2
+    
+    other_unknown = df[df['Suggested Indicator'].isin(['8', 'blank', 'N/A'])]
+    for inst in other_unknown['Institution Name'].value_counts().head(10).index:
+        ws_inst.cell(row=row, column=1, value=inst).font = Font(bold=True)
+        row += 1
+        samples = other_unknown[other_unknown['Institution Name'] == inst]['Extracted Call Number'].dropna().unique()[:8]
+        for sample in samples:
+            ws_inst.cell(row=row, column=2, value=str(sample)[:60])
+            row += 1
+        row += 1
+    
+    ws_inst.column_dimensions['A'].width = 50
+    ws_inst.column_dimensions['B'].width = 40
+    for col in 'CDEFGHIJKLMNO':
+        ws_inst.column_dimensions[col].width = 10
+    
+    wb.save(output_path)
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+def main(input_path, output_path):
+    """Main processing function."""
+    
+    print(f"Loading {input_path}...")
+    
+    # Load data (skip header rows typical in Alma Analytics exports)
+    df = pd.read_excel(input_path, skiprows=2, header=None)
+    df.columns = [
+        'Permanent Call Number', 'Permanent Call Number Type', '852 MARC',
+        'Normalized Call Number', 'Institution Name', 'MMS Id'
+    ]
+    df = df.iloc[1:].reset_index(drop=True)
+    
+    print(f"Loaded {len(df)} records")
+    
+    # Parse 852 MARC and extract call numbers
+    print("Parsing 852 MARC fields...")
+    df['Parsed MARC'] = df['852 MARC'].apply(parse_852_marc)
+    df['Extracted Call Number'] = df['Parsed MARC'].apply(get_call_number_from_marc)
+    df['Call Number for Analysis'] = df.apply(
+        lambda row: row['Extracted Call Number'] if row['Extracted Call Number'] else row['Permanent Call Number'],
+        axis=1
+    )
+    
+    # Classify each call number
+    print("Classifying call numbers...")
+    indicators = []
+    class_types = []
+    confidences = []
+    notes = []
+    
+    for cn in df['Call Number for Analysis']:
+        result = categorize_call_number(cn)
+        indicators.append(result[0])
+        class_types.append(result[1])
+        confidences.append(result[2])
+        notes.append(result[3])
+    
+    df['Suggested Indicator'] = indicators
+    df['Classification Type'] = class_types
+    df['Confidence'] = confidences
+    df['Notes'] = notes
+    
+    # Print summary
+    print("\nClassification Summary:")
+    print("=" * 60)
+    summary = df.groupby(['Suggested Indicator', 'Classification Type']).size().reset_index(name='Count')
+    summary = summary.sort_values('Count', ascending=False)
+    print(summary.to_string(index=False))
+    
+    # Create Excel output
+    print(f"\nSaving to {output_path}...")
+    create_excel_output(df, output_path)
+    
+    print("Done!")
+
+
+if __name__ == '__main__':
+    if len(sys.argv) != 3:
+        print(f"Usage: {sys.argv[0]} input.xlsx output.xlsx")
+        sys.exit(1)
+    
+    main(sys.argv[1], sys.argv[2])
