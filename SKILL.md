@@ -499,7 +499,59 @@ AV/media locations fall into three categories with different classification impl
 
 **Note:** Items in format-specific media locations often use shelving control numbers (format + accession), but some may have LC call numbers. Items in equipment locations are almost never real call numbers.
 
-*Add periodicals locations as needed.*
+**CUNY periodicals locations (items may use simplified classification or no call number):**
+
+Items in periodicals locations often have "Periodical" or a title abbreviation instead of a standard call number. Per the MARC 852 examples, simplified schemes like `Per` in $h are indicator 8 (other scheme), while shelving forms of title in $l are indicator 5.
+
+| Code | Institution | Description | Notes |
+|------|-------------|-------------|-------|
+| PER | Baruch College | Periodicals Stacks 3rd Floor | |
+| PER | BMCC | Popular Magazines | |
+| PER | Bronx CC | Periodicals | |
+| FMP | Brooklyn College | Microfilm - Periodicals | Microfilm format |
+| PER | Brooklyn College | Music Library Periodicals | |
+| PERC | Brooklyn College | Periodicals - Current | |
+| PERE | Brooklyn College | Periodical Stacks | |
+| PER | College of Staten Island | Periodicals, 3rd Floor | |
+| PER | Craig Newmark Journalism | Periodicals | |
+| PER | CUNY Graduate Center | Periodical Collection | |
+| PER | Hostos CC | Periodicals | |
+| PERB | Hostos CC | Periodicals (Bound) | |
+| PER | Hunter College | Periodical Stacks | |
+| PERH | Hunter College | Health Prof. Library Periodicals | |
+| PER | Hunter College | Cooperman Library Periodicals (Current Issues) | |
+| PER_on3 | Hunter College | Cooperman Library Periodicals (Current-3rd floor) | |
+| SERM | Hunter College | Cooperman Library Education Reading Room | Serials |
+| SERMR | Hunter College | Cooperman Library Educational Reference | Serials reference |
+| SSWPERW | Hunter College | Silberman Periodicals at Cooperman | |
+| PER | John Jay College | Periodicals | |
+| PEMIC | Kingsborough CC | Microfilm - Ask at Periodicals Desk | Microfilm at periodicals desk |
+| PER | Kingsborough CC | Periodicals | |
+| OVPER | LaGuardia CC | Oversize Periodicals | |
+| PER | LaGuardia CC | Periodicals | |
+| MICRO | Lehman College | Periodical Microforms | Microfilm format |
+| PER | Lehman College | Periodicals | |
+| PERE | Lehman College | Education Periodicals | |
+| PERS | Lehman College | Sci Tech Periodicals | |
+| RPER | Lehman College | Periodicals Reference | |
+| PER | Medgar Evers College | Periodicals | |
+| PERB | NYC College of Technology | 4th Floor, Periodicals | |
+| APER | Queens College | Art Periodicals Level 6 | |
+| PFILM | Queens College | Microfilm periodicals | Microfilm format |
+| PER3 | Queens College | Periodicals Level 4 | |
+| PER | Queens College | Remote Storage (Request through ILL) | |
+| MPFLM | Queens College | Microfilm Periodicals | Microfilm format |
+| MPER | Queens College | Periodicals Main Floor | |
+| PER | Queensborough CC | Periodicals | |
+| APER0 | City College | Architecture: Periodicals | |
+| CPER0 | City College | Cohen Periodicals | |
+| CPR4F | City College | Cohen Periodicals - 4th Floor | |
+| MPER0 | City College | Music: Periodicals | |
+| SPRS0 | City College | Science/Engineering Periodicals | |
+| SPER0 | City College | Science/Engineering Periodicals (pre-1990) | |
+| PER | York College | Periodicals | |
+
+**Note:** Many periodicals have standard LC call numbers -- the location alone doesn't mean the call number is non-standard. However, if the call number field contains just "Periodical", "Per", or a title abbreviation, that's a simplified scheme (indicator 8) or shelving form of title (indicator 5), not an error.
 
 **Known limitation:** Some SuDoc numbers lack colons (e.g., `A 1.2 F 51/3`). These are structurally indistinguishable from LC call numbers based on content alone. A location code like DOCS or CUSP0 may be the only way to identify them as SuDoc.
 
