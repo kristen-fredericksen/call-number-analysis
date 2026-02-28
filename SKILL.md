@@ -66,16 +66,18 @@ In consortium environments (like CUNY, SUNY, CSU, etc.), local schemes vary by c
 | Feature | LC | SuDoc | Dewey | NLM |
 |---------|-----|-------|-------|-----|
 | **Starts with** | Valid LC letters | Agency stem | 3 digits | W or QS-QZ |
-| **Has colon (:)** | Never* | Almost always | Never | Never |
+| **Has colon (:)** | Almost never* | Almost always | Never | Never |
 | **Class structure** | Letters + number + cutter | Agency.bureau:series | Number + decimal + cutter | Letters + number + cutter |
 
-*\* LC call numbers do not use colons structurally. A colon in an LC-looking call number is almost always SuDoc; very rarely it may be a data entry error. See "The Colon Rule" below.*
+*\* LC call numbers almost never use colons. A colon in an LC-looking call number is almost always SuDoc; very rarely it may be a data entry error. One known exception: some LC Geography/Maps numbers in the G schedule use colons in table notation (e.g., `G1254.N4:2M3` for Manhattan, `G1254.N4:3B8` for Brooklyn). These are exceedingly rare. See "The Colon Rule" below.*
 
 #### SuDoc vs LC: The Colon Rule
 
-**The colon (`:`) is the strongest single indicator of SuDoc classification.** A call number containing a colon is almost always SuDoc. LC call numbers do not use colons as part of their structure, so a colon in what looks like an LC call number is either SuDoc or (very rarely) a data entry error.
+**The colon (`:`) is the strongest single indicator of SuDoc classification.** A call number containing a colon is almost always SuDoc. LC call numbers almost never use colons, so a colon in what looks like an LC call number is usually SuDoc or a data entry error.
 
-**In practice:** Treat a colon as strong evidence of SuDoc, but not absolute proof. If the content before the colon matches a SuDoc agency stem pattern (letter(s) + number.number), it's SuDoc with high confidence. If the colon appears in an otherwise clearly LC-structured call number with no SuDoc stem pattern, flag it for review as a possible error.
+**Known LC exception:** Some Geography/Maps numbers in the G schedule use colons as part of LC table notation (e.g., `G1254.N4:2M3`, `G1254.N4:2S8`, `G1254.N4:3Q4`). These are exceedingly rare and will be misclassified as SuDoc by the script. They are documented here as a known limitation rather than handled in code.
+
+**In practice:** Treat a colon as strong evidence of SuDoc, but not absolute proof. If the content before the colon matches a SuDoc agency stem pattern (letter(s) + number.number), it's SuDoc with high confidence. If the colon appears in an otherwise clearly LC-structured call number with no SuDoc stem pattern, flag it for review as a possible error or a rare LC table notation.
 
 | Call Number | Classification | Why |
 |-------------|---------------|-----|
@@ -352,7 +354,7 @@ In Analytics, use "is between" operator on Normalized Call Number field:
 When analyzing call numbers:
 
 1. [ ] **Check for non-call-numbers first** (notes, instructions, URLs, equipment, format descriptors alone)
-2. [ ] **Look for colons** — presence of `:` strongly indicates SuDoc (very rarely a data entry error)
+2. [ ] **Look for colons** — presence of `:` strongly indicates SuDoc (very rarely a data entry error or LC G-schedule table notation)
 3. [ ] **Examine the starting letters** against valid LC classes (remember: no I, O, W, X, Y in LC)
 4. [ ] **Check for NLM patterns** (W, QS-QZ followed by numbers)
 5. [ ] **Check for LAC patterns** (FC + number, or PS + number ≥ 8000)

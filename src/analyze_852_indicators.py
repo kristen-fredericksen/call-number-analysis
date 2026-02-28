@@ -365,6 +365,10 @@ def is_sudoc(cn):
     containing a colon is almost always SuDoc. Very rarely, a colon may be
     a data entry error in another scheme.
 
+    Known limitation: Some LC Geography/Maps numbers use colons in table
+    notation (e.g., G1254.N4:2M3). These are exceedingly rare and will be
+    misclassified as SuDoc. See SKILL.md "The Colon Rule" for details.
+
     SuDoc pattern: Agency stem + number.number/series + : + item designation
     Examples: A 1.10:976, Y 4.J 89/1:S 53/5, HE 20.3152:P 94,
               C55.281/2-2:IM 1/2/CD, D 5.12/2: 6-03.7, GA 1.16/3-3: 996
