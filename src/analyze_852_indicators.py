@@ -292,8 +292,12 @@ def is_av_shelving_number(cn):
     have different structure (class + number + cutter, e.g., "CD921 .S65")
     """
     # Pattern 1: Simple format + number (CD 1811, DVD 456)
+    # BUT NOT if followed by a cutter pattern (dot + letter), which means LC
+    # e.g., "CD 3960 .P9" is LC class CD (Diplomatics), not an AV disc
     if re.match(r'^(CD|DVD|VHS|LP|MC|DAT)\s+\d+(\s|$)', cn, re.IGNORECASE):
-        return True
+        # Check if it looks like LC (has a cutter after the number)
+        if not re.match(r'^(CD|DVD)\s*\d+[\s.]+\.?[A-Z]\d*', cn, re.IGNORECASE):
+            return True
 
     # Pattern 2: Format + ROM + number (CD ROM 003, DVD ROM 001)
     if re.match(r'^(CD|DVD)[\s\-]*(ROM)\s+\d+', cn, re.IGNORECASE):
@@ -351,10 +355,22 @@ def extract_class_letters(cn):
 
 
 def is_valid_lc_class(letters):
-    """Check if letters are a valid LC classification."""
+    """
+    Check if letters are a valid LC classification.
+
+    For three-letter classes (like KFN, KJC, KTQ), accepts them if
+    the first two letters are a valid two-letter class. This handles
+    the many three-letter subclasses in the K (Law) schedule and
+    similar cases without needing to enumerate them all.
+    """
     if not letters:
         return False
-    return letters in LC_VALID_CLASSES
+    if letters in LC_VALID_CLASSES:
+        return True
+    # Three-letter classes: valid if first two letters are a valid class
+    if len(letters) == 3 and letters[:2] in LC_VALID_CLASSES:
+        return True
+    return False
 
 
 def is_sudoc(cn):
@@ -421,7 +437,7 @@ def is_dewey(cn):
 # the Permanent Call Number display field.
 # Sorted longest-first so "REFERENCE" matches before "REF".
 SHELVING_PREFIXES = [
-    'REFERENCE', 'OVERSIZE', 'RESERVE', 'QUARTO', 'FOLIO', 'DOCS', 'REF',
+    'REFERENCE', 'OVERSIZE', 'RESERVE', 'QUARTO', 'FOLIO', 'SPEC', 'DOCS', 'REF',
 ]
 
 
@@ -547,20 +563,28 @@ def categorize_call_number(call_num):
 
     # === LC CLASSIFICATION ===
     if class_letters and is_valid_lc_class(class_letters):
-        # LC with cutter (allow space before decimal in class number)
+        # CIP/preliminary LC (MLCS pattern) — detect before normal LC
+        # Example: "PR9499.4 .B MLCS 2002/00057 (P)"
+        if re.search(r'MLCS\s*\d{4}/', cn_stripped, re.IGNORECASE):
+            return '0', 'Library of Congress', 'Low', 'LC (CIP/preliminary — MLCS number)'
+        # LC with attached cutter (no space between class number and cutter)
+        # Handles: "BF723.C5 D495 2002", "HC110.C6 M28", "H1.A4 v.582"
+        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}\.[A-Z]\d*', cn_stripped, re.IGNORECASE):
+            return '0', 'Library of Congress', 'High', 'LC with cutter'
+        # LC with cutter (space between class number and cutter)
         # Handles: "E 185 .5 B58", "BX 1758.2 M53", "N620 .F6 A85"
-        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}(\s*\.\d+)?\s+\.?[A-Z]\d*', cn_stripped):
+        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}(\s*\.\d+)?\s+\.?[A-Z]\d*', cn_stripped, re.IGNORECASE):
             return '0', 'Library of Congress', 'High', 'LC with cutter'
         # LC with number + date + cutter (e.g., "G 3860 1994 .H37")
-        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}\s+\d{4}\s+\.?[A-Z]\d*', cn_stripped):
+        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}\s+\d{4}\s+\.?[A-Z]\d*', cn_stripped, re.IGNORECASE):
             return '0', 'Library of Congress', 'High', 'LC with date and cutter'
         # LC with decimal but no cutter
-        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}\s*\.\d+', cn_stripped):
+        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}\s*\.\d+', cn_stripped, re.IGNORECASE):
             return '0', 'Library of Congress', 'Medium', 'LC class with decimal'
         # Simple LC (just class and number, with or without space)
-        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}(\s|$)', cn_stripped):
+        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}(\s|$)', cn_stripped, re.IGNORECASE):
             return '0', 'Library of Congress', 'Medium', 'LC class and number'
-    
+
     # === LOCAL COLLECTION SCHEMES ===
     # Checked AFTER SuDoc/NLM/LAC/Dewey/LC to avoid catching valid call numbers
     # like "QA 24" or "HE 20" that match the prefix + number pattern.
@@ -587,7 +611,10 @@ def categorize_call_number(call_num):
         return '5', 'Title', 'High', 'Title-based shelving'
 
     # === FORMAT/COLLECTION CODES ===
-    if re.match(r'^[A-Z]{2,4}\s+[A-Z]\d', cn_stripped) and len(cn_stripped.split()[0]) <= 4:
+    # Pattern: 2-4 letters + space + letter + digit (no class number between)
+    # This can't be LC because LC always requires digits after the class letters.
+    # Examples: "VC A54" (Video Cassette), "SPEC B12"
+    if re.match(r'^[A-Z]{2,4}\s+[A-Z]\d', cn_stripped, re.IGNORECASE) and len(cn_stripped.split()[0]) <= 4:
         return '4', 'Shelving control number', 'Medium', 'Format/collection code'
 
     # === LOCAL NOTATION ===

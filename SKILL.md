@@ -365,6 +365,22 @@ When analyzing call numbers:
 10. [ ] If working with Analytics data, verify normalization matches expected pattern
 11. [ ] For range queries, construct proper normalized filter values
 
+## Location Codes as Classification Hints
+
+The 852 $$c subfield (location) can help disambiguate borderline call numbers. The Python script classifies based on call number content alone, but during manual review, location codes provide useful context.
+
+**Known CUNY location hints:**
+
+| Code | Institution | Description | Suggests |
+|------|-------------|-------------|----------|
+| DOCS | Brooklyn College | Government documents | SuDoc |
+| CUSP0 | City College | Cohen U.S. Docs Pamphlets, 2nd floor - Gov. doc. room | SuDoc |
+| SPEC | Medgar Evers College | Special Collections | Local scheme or shelving control |
+
+*This table is a starting point. Add location codes as they are encountered during analysis.*
+
+**Known limitation:** Some SuDoc numbers lack colons (e.g., `A 1.2 F 51/3`). These are structurally indistinguishable from LC call numbers based on content alone. A location code like DOCS or CUSP0 may be the only way to identify them as SuDoc.
+
 ## Quick Reference: Classification Decision Tree
 
 ```
@@ -376,7 +392,7 @@ START
   │
   ├─ AV/media shelving (DVD/CD/VHS/Video/Fiche + number)? → Shelving control (indicator 4)
   │
-  ├─ [Strip shelving prefixes: OVERSIZE, DOCS, FOLIO, REF, etc.]
+  ├─ [Strip shelving prefixes: OVERSIZE, DOCS, FOLIO, REF, SPEC, etc.]
   │
   ├─ Contains colon (:)? → Likely SUDOC (indicator 3)
   │   └─ If no SuDoc stem pattern, flag for review (may be data entry error)
