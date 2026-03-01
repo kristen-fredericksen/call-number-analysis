@@ -39,7 +39,6 @@ In consortium environments (like CUNY, SUNY, CSU, etc.), local schemes vary by c
 | Hunter College | `ALLIGER.1.BOOK` | Named collection |
 | Hunter College | `81-1009` | Accession numbers |
 | Hostos | `Browse D`, `Browse G` | Browsing collection by subject |
-| Baruch | `.T46 1995` | Malformed LC (missing class letters) |
 
 **Recommendations for consortium data:**
 
