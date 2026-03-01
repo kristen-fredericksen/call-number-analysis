@@ -50,6 +50,7 @@ In consortium environments (like CUNY, SUNY, CSU, etc.), local schemes vary by c
 5. **Document campus-specific schemes** — Build a reference of known local patterns per institution
 
 ### Common Data Quality Issues
+- LC call numbers not coded as any scheme (blank indicator)
 - LC call numbers coded as "Other scheme" (indicator 8 instead of 0)
 - LC call numbers with irregular spacing (e.g., `BX 1758.2 M53`) still valid but may fail validation
 - Local prefixes (DVD, Folio, Reference) mistaken for LC class letters
