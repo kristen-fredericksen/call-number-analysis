@@ -80,10 +80,12 @@ def get_call_number_from_marc(parsed_marc):
     - $$j (shelving control number) - used for indicator 4
     - $$h + $$i (classification + item) - used for LC, Dewey, etc.
 
-    Returns: (call_number, from_j) where from_j is True if the value came from $$j.
+    Returns: (call_number, from_j, j_combined) where from_j is True if the
+    value came from $$j alone, and j_combined is True if $$j was merged with
+    $$h/$$i (meaning the cutter was miscoded in $$j instead of $$i).
     """
     if not parsed_marc:
-        return None, False
+        return None, False, False
 
     subfields = parsed_marc.get('subfields', {})
 
@@ -92,13 +94,20 @@ def get_call_number_from_marc(parsed_marc):
     j = subfields.get('j', '')
 
     if j:
-        return j.strip(), True
+        if h or i:
+            # $j alongside $h or $i — the call number is split across
+            # subfields. $j is the item part of a classified call number,
+            # not a standalone shelving control number.
+            parts = [p for p in [h, i, j] if p]
+            return ' '.join(parts).strip(), False, True
+        # $j only (no $h or $i) — standalone shelving control number
+        return j.strip(), True, False
     elif h:
         if i:
-            return f"{h} {i}".strip(), False
-        return h.strip(), False
+            return f"{h} {i}".strip(), False, False
+        return h.strip(), False, False
 
-    return None, False
+    return None, False, False
 
 
 # =============================================================================
@@ -123,7 +132,7 @@ LC_VALID_CLASSES = set([
     'GA', 'GB', 'GC', 'GE', 'GF', 'GN', 'GR', 'GT', 'GV',
     'HA', 'HB', 'HC', 'HD', 'HE', 'HF', 'HG', 'HJ', 'HM', 'HN', 'HQ', 'HS', 'HT', 'HV', 'HX',
     'JA', 'JC', 'JF', 'JJ', 'JK', 'JL', 'JN', 'JQ', 'JS', 'JV', 'JX', 'JZ',
-    'KD', 'KE', 'KF', 'KG', 'KH', 'KJ', 'KK', 'KL', 'KN', 'KP', 'KQ', 'KR', 'KS', 'KT', 'KU', 'KV', 'KZ',
+    'KB', 'KD', 'KE', 'KF', 'KG', 'KH', 'KJ', 'KK', 'KL', 'KN', 'KP', 'KQ', 'KR', 'KS', 'KT', 'KU', 'KV', 'KZ',
     'LA', 'LB', 'LC', 'LD', 'LE', 'LF', 'LG', 'LH', 'LJ', 'LT',
     'ML', 'MT',
     'NA', 'NB', 'NC', 'ND', 'NE', 'NK', 'NX',
@@ -151,14 +160,14 @@ _TEST_VALUES = {
 
 _FORMAT_ONLY = {
     'cd rom', 'cd-rom', 'cdrom', 'dvd rom', 'dvd-rom', 'dvdrom',
-    'dvd', 'cd', 'vhs', 'dvd video',
+    'dvd', 'cd', 'vhs', 'dvd video', 'computer file',
     'cassette', 'microfilm', 'microfiche', 'filmstrip'
 }
 
 _EQUIPMENT_WORDS = {
     'projector', 'marker', 'charger', 'adapter', 'cable', 'remote',
-    'headphones', 'speaker', 'tripod', 'screen', 'pointer', 'clicker',
-    'eraser', 'whiteboard', 'easel', 'calculator', 'laptop'
+    'headphones', 'headset', 'speaker', 'tripod', 'screen', 'pointer',
+    'clicker', 'eraser', 'whiteboard', 'easel', 'calculator',
 }
 
 # Public note patterns — patron-facing instructions that belong in $z
@@ -205,6 +214,12 @@ _PUBLIC_NOTE_PATTERNS = [re.compile(p) for p in [
 
     # Browsing notes
     r'(?i)current\s+issues',
+
+    # Location/room references
+    r'(?i)reading\s+room',
+
+    # Loan period/circulation notes
+    r'(?i)\d+[- ]?(day|week|hour)\s+(loan|checkout|reserve)',
 ]]
 
 # Staff note patterns — cataloging/processing notes that belong in $x
@@ -213,7 +228,7 @@ _STAFF_NOTE_PATTERNS = [re.compile(p) for p in [
     r'(?i)cataloged\s+(under|with|as|separately)',
     r'(?i)classed\s+(with|in)',
     r'(?i)search\s+under',
-    r'(?i)see\s+(also|librarian|reference)',
+    r'(?i)see\s+(also|librarian|reference|archivist)',
     r'(?i)contact\s+',
     r'(?i)request\s+(from|at|through)',
     r'(?i)consult\s+',
@@ -222,17 +237,26 @@ _STAFF_NOTE_PATTERNS = [re.compile(p) for p in [
     r'(?i)keep\s+at',
     r'(?i)kept\s+(on|at|in)',
     r'(?i)stored\s+(off-?site|in)',
+    r'(?i)shelve\s+in\b',
+    r'(?i)library\s+copy',
+    r'(?i)scholarship',
     r'(?i)order\s+(from|through)',
     r'(?i)interlibrary\s+loan',
     r'(?i)\bill\s+only',
 
     # Status notes
+    r'(?i)^in\s+process',
     r'(?i)superseded',
     r'(?i)cancelled',
     r'(?i)withdrawn',
     r'(?i)\bmissing\b',
     r'(?i)\blost\b',
     r'(?i)damaged',
+
+    # Shelving instructions (staff-facing)
+    r'(?i)sort\s+by\s+',
+    r'(?i)separately\s+classed',
+    r'(?i)shelved\s+alphabetically',
 
     # Volume/issue notation without call number
     r'(?i)^\*\s*(vol|no\.?|v\.|issue|pt\.?|part)',
@@ -268,7 +292,10 @@ def is_not_a_call_number(cn):
     if cn_lower in _FORMAT_ONLY:
         return 'format_descriptor'
 
-    # Equipment and supplies (not information resources at all)
+    # Equipment and supplies WITHOUT identifiers — standalone descriptions
+    # like "Logitech Headset" (no number = not a call number).
+    # Items WITH identifiers ("Apple Mouse #5", "TOOLKIT#1") are shelving
+    # control numbers and should fall through to normal classification.
     if set(cn_lower.split()) & _EQUIPMENT_WORDS and not re.search(r'\d', cn):
         return 'equipment'
 
@@ -304,10 +331,11 @@ def is_av_shelving_number(cn):
     Note: CD and DVD are also valid LC class letters, but LC call numbers
     have different structure (class + number + cutter, e.g., "CD921 .S65")
     """
-    # Pattern 1: Simple format + number (CD 1811, DVD 456)
+    # Pattern 1: Simple format + number (CD 1811, DVD 456, VHS-937, DVD-14)
+    # Allows space or hyphen between format and number.
     # BUT NOT if followed by a cutter pattern (dot + letter), which means LC
     # e.g., "CD 3960 .P9" is LC class CD (Diplomatics), not an AV disc
-    if re.match(r'^(CD|DVD|VHS|LP|MC|DAT)\s+\d+(\s|$)', cn, re.IGNORECASE):
+    if re.match(r'^(CD|DVD|VHS|LP|MC|DAT)[\s\-]+[A-Z]*\d+(\s|$)', cn, re.IGNORECASE):
         # Check if it looks like LC (has a cutter after the number)
         if not re.match(r'^(CD|DVD)\s*\d+[\s.]+\.?[A-Z]\d*', cn, re.IGNORECASE):
             return True
@@ -321,16 +349,36 @@ def is_av_shelving_number(cn):
     if re.match(r'^[A-Z]+\s+(CD|DVD)[\s\-]*(ROM)?\s+\d+', cn, re.IGNORECASE):
         return True
 
-    # Pattern 4: Video + format/disc + number (with optional institution prefix)
-    # Examples: "DSI Video CD 18", "DSI Video DVD 22", "DSI Video VHS 53"
-    #           "City College CWE Video - disc 58", "CohenLib Video disc 110"
-    #           "CWE Video- disc 152", "DSI video VHS 59/DVD 89"
-    if re.search(r'Video[\s\-]*(disc|CD|DVD|VHS)\s*\d+', cn, re.IGNORECASE):
+    # Pattern 4: Video/Videotape + format/disc + number (with optional prefix)
+    # Examples: "DSI Video CD 18", "CohenLib Video disc 110",
+    #           "MusLib Video- disc MD56", "MusLib Video- recording MV74",
+    #           "CohenLib Video- tape 440", "CohenLib Videotape 264"
+    if re.search(r'Video[\s\-]*(disc|recording|tape|CD|DVD|VHS)\s*[A-Z]*\d+', cn, re.IGNORECASE):
         return True
 
-    # Pattern 5: Fiche/microfiche + number
-    # Examples: "Fiche 414", "FIche 438", "Fiche 685"
-    if re.match(r'^Fiche\s+\d+', cn, re.IGNORECASE):
+    # Pattern 5: VIDEO CASSETTE + number
+    # Examples: "VIDEO CASSETTE 2199", "VIDEO CASSETTE 2198"
+    if re.match(r'^VIDEO\s+CASSETTE\s+\d+', cn, re.IGNORECASE):
+        return True
+
+    # Pattern 6: Fiche/microfiche + number
+    # Examples: "Fiche 414", "Microcard 5067"
+    if re.match(r'^(Fiche|Micro(film|card|fiche))\s*\d+', cn, re.IGNORECASE):
+        return True
+
+    # Pattern 7: Microfilm + format code + number
+    # Examples: "Microfilm MF 400"
+    if re.match(r'^Micro(film|card|fiche)\s+[A-Z]+\s+\d+', cn, re.IGNORECASE):
+        return True
+
+    # Pattern 8: Recording + accession code (with optional prefix)
+    # Examples: "MusLib Recording CD1116"
+    if re.search(r'Recording\s+[A-Z]*\d+', cn, re.IGNORECASE):
+        return True
+
+    # Pattern 9: Music CD/format + number (without standard prefix)
+    # Examples: "Music CD no.8", "CD Rhymes"
+    if re.match(r'^Music\s+(CD|DVD)\s+', cn, re.IGNORECASE):
         return True
 
     return False
@@ -437,7 +485,15 @@ def is_dewey(cn):
         # Make sure it's not a repeated number (like "102 102")
         if not cn.startswith(f"{dewey_num} {dewey_num}"):
             return True, 'High', 'Dewey with Cutter'
-    
+
+    # 3 digits + author abbreviation (no decimal, no standard cutter)
+    # e.g., "861 Bro 3-5" — Dewey class + truncated author name
+    match = re.match(r'^(\d{3})\s+[A-Z][a-z]{1,4}\b', cn)
+    if match:
+        dewey_num = match.group(1)
+        if not cn.startswith(f"{dewey_num} {dewey_num}"):
+            return True, 'Medium', 'Dewey with author abbreviation'
+
     return False, None, None
 
 
@@ -453,9 +509,9 @@ def is_dewey(cn):
 # Sorted longest-first so "REFERENCE" matches before "REF", "PERIODICALS"
 # before "PERIODICAL", etc.
 SHELVING_PREFIXES = [
-    'PERIODICALS', 'PERIODICAL', 'DISSERTATION', 'REFERENCE', 'OVERSIZE',
-    'RESERVE', 'SERIALS', 'SERIAL', 'THESIS', 'QUARTO', 'FOLIO', 'SPEC',
-    'DOCS', 'PER', 'REF',
+    'PERIODICALS', 'PERIODICAL', 'DISSERTATION', 'JUVENILE', 'REFERENCE',
+    'OVERSIZE', 'RESERVE', 'SERIALS', 'SERIAL', 'THESIS', 'QUARTO',
+    'FOLIO', 'SPEC', 'DOCS', 'JUV', 'PER', 'REF',
 ]
 
 
@@ -567,6 +623,10 @@ def _classify_call_number(cn_stripped):
         # LC with decimal but no cutter
         if re.match(r'^[A-Z]{1,3}\s*\d{1,4}\s*\.\d+', cn_stripped, re.IGNORECASE):
             return '0', 'Library of Congress', 'Medium', 'LC class with decimal'
+        # LC with cutter directly attached (no dot, no space)
+        # e.g., PQ2402A3, M1510S3.8, PR3716F55L, N6953R4
+        if re.match(r'^[A-Z]{1,3}\d{1,4}[A-Z]\d*', cn_stripped):
+            return '0', 'Library of Congress', 'Medium', 'LC with cutter (no separator)'
         # Simple LC (just class and number)
         if re.match(r'^[A-Z]{1,3}\s*\d{1,4}(\s|$)', cn_stripped, re.IGNORECASE):
             return '0', 'Library of Congress', 'Medium', 'LC class and number'
@@ -590,10 +650,6 @@ def _classify_call_number(cn_stripped):
     if re.match(r'^\d{4,}-\d+', cn_stripped):
         return '7', 'Local scheme', 'Medium', 'Accession number'
 
-    # === FORMAT/COLLECTION CODES ===
-    if re.match(r'^[A-Z]{2,4}\s+[A-Z]\d', cn_stripped, re.IGNORECASE) and len(cn_stripped.split()[0]) <= 4:
-        return '4', 'Shelving control number', 'Medium', 'Format/collection code'
-
     # === LOCAL NOTATION ===
     if re.match(r'^[*#]', cn_stripped):
         return '7', 'Local scheme', 'Low', 'Local notation'
@@ -605,15 +661,25 @@ def _classify_call_number(cn_stripped):
 # MAIN CLASSIFICATION FUNCTION
 # =============================================================================
 
-def categorize_call_number(call_num, from_j=False):
+_TRUSTED_INSTITUTIONS = {
+    'Kingsborough Community College',
+    'Borough of Manhattan Community College',
+}
+
+
+def categorize_call_number(call_num, from_j=False, j_combined=False, institution=None):
     """
     Analyze a call number and suggest the appropriate 852 first indicator.
 
     Args:
         call_num: The call number string to classify.
         from_j: True if the call number came from MARC 852 $j (shelving
-                control number subfield). If True, the call number is
-                treated as indicator 4 by definition.
+                control number subfield). If True AND the institution is
+                trusted, the call number is treated as indicator 4. If the
+                institution is not trusted, the call number is classified
+                normally and the $j placement is noted.
+        institution: Institution name, used to determine whether to trust
+                     the cataloger's $j subfield choice.
 
     Returns: (indicator, classification_type, confidence, note)
 
@@ -635,10 +701,13 @@ def categorize_call_number(call_num, from_j=False):
     cn = str(call_num).strip()
 
     # === $j SUBFIELD OVERRIDE ===
-    # If the call number came from $j, it's shelving control by definition.
-    # The cataloger explicitly chose the shelving control subfield.
+    # If the call number came from $j AND the institution is trusted,
+    # treat it as shelving control — the cataloger deliberately chose $j.
+    # At untrusted institutions, classify normally and note the $j placement.
     if from_j:
-        return '4', 'Shelving control number', 'High', 'In $j (shelving control subfield)'
+        trusted = institution in _TRUSTED_INSTITUTIONS if institution else False
+        if trusted:
+            return '4', 'Shelving control number', 'High', 'In $j (shelving control subfield)'
 
     # === NON-CALL-NUMBERS ===
     not_cn = is_not_a_call_number(cn)
@@ -654,7 +723,7 @@ def categorize_call_number(call_num, from_j=False):
 
     # === AV SHELVING NUMBERS ===
     if is_av_shelving_number(cn):
-        return '4', 'Shelving control number', 'High', 'AV format shelving number'
+        return '4', 'Shelving control number', 'High', 'AV format shelving'
 
     # === CHECK FOR PREFIX-ONLY CALL NUMBERS ===
     # Words like "Periodical", "Thesis", "Reference" are $k (call number
@@ -663,8 +732,8 @@ def categorize_call_number(call_num, from_j=False):
     if cn.upper().strip() in SHELVING_PREFIXES:
         prefix_word = cn.strip()
         return '8', 'Other scheme', 'Low', (
-            f"Possible $k prefix '{prefix_word}' used as entire call number — "
-            f"could be shelving control (4) or other scheme (8)")
+            f"'{prefix_word}' should be in $k — used as entire call number, "
+            f"no classification follows. Could be shelving control (4) or other scheme (8)")
 
     # === STRIP SHELVING PREFIXES ===
     # Try stripping $k prefixes (OVERSIZE, DOCS, PERIODICAL, THESIS, etc.)
@@ -677,17 +746,28 @@ def categorize_call_number(call_num, from_j=False):
     if result:
         indicator, scheme, conf, note = result
         if prefix_found:
-            note += f" (prefix '{prefix_found}' suggests $k)"
-        return indicator, scheme, conf, note
-
-    # === PREFIX STRIPPED BUT REMAINDER NOT CLASSIFIED ===
-    if prefix_found:
-        return '8', 'Other scheme', 'Low', (
-            f"Possible $k prefix '{prefix_found}' — remainder '{cn_stripped}' "
+            note += f" — move '{prefix_found}' to $k"
+    elif prefix_found:
+        # === PREFIX STRIPPED BUT REMAINDER NOT CLASSIFIED ===
+        indicator, scheme, conf, note = '8', 'Other scheme', 'Low', (
+            f"'{prefix_found}' should be in $k — remainder '{cn_stripped}' "
             f"not a standard classification. Could be shelving control (4) or other scheme (8)")
+    else:
+        # === UNRECOGNIZED ===
+        indicator, scheme, conf, note = '8', 'Other scheme', 'Low', 'Pattern not recognized - review recommended'
 
-    # === UNRECOGNIZED ===
-    return '8', 'Other scheme', 'Low', 'Pattern not recognized - review recommended'
+    # If the value came from $j at an untrusted institution, note the
+    # mismatch — the cataloger put it in the shelving control subfield
+    # but the content looks like something else.
+    if from_j and not (institution and institution in _TRUSTED_INSTITUTIONS):
+        note += ' — in $j but may belong in $h'
+
+    # If $j was combined with $h/$i, the cutter was miscoded in $j
+    # instead of $i. Note the subfield error.
+    if j_combined:
+        note += ' — move $j cutter to $i'
+
+    return indicator, scheme, conf, note
 
 
 # =============================================================================
@@ -699,11 +779,8 @@ def create_excel_output(df, output_path):
     
     wb = Workbook()
 
-    # Base font: 12pt Arial (applies to all cells by default)
-    normal = wb._named_styles['Normal']
-    normal.font = Font(name='Arial', size=12)
-
     # Styles
+    data_font = Font(name='Arial', size=12)
     header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
     header_font = Font(name='Arial', size=12, bold=True, color='FFFFFF')
     thin_border = Border(
@@ -744,6 +821,7 @@ def create_excel_output(df, output_path):
         ]
         for col_idx, value in enumerate(data, 1):
             cell = ws_data.cell(row=row_idx + 2, column=col_idx, value=value)
+            cell.font = data_font
             cell.border = thin_border
             if col_idx == 10 and value in conf_colors:
                 cell.fill = conf_colors[value]
@@ -782,11 +860,11 @@ def create_excel_output(df, output_path):
     ws_stats.cell(row=row, column=1, value="Overall Summary")
     ws_stats.cell(row=row, column=1).font = Font(name='Arial', size=12, bold=True)
     row += 1
-    ws_stats.cell(row=row, column=1, value="Total Records:")
-    ws_stats.cell(row=row, column=2, value=len(df))
+    ws_stats.cell(row=row, column=1, value="Total Records:").font = data_font
+    ws_stats.cell(row=row, column=2, value=len(df)).font = data_font
     row += 1
-    ws_stats.cell(row=row, column=1, value="Records with Extracted Call Number:")
-    ws_stats.cell(row=row, column=2, value=df['Extracted Call Number'].notna().sum())
+    ws_stats.cell(row=row, column=1, value="Records with Extracted Call Number:").font = data_font
+    ws_stats.cell(row=row, column=2, value=df['Extracted Call Number'].notna().sum()).font = data_font
     row += 2
     
     ws_stats.cell(row=row, column=1, value="By Classification Type")
@@ -801,11 +879,15 @@ def create_excel_output(df, output_path):
     row += 1
     
     for _, data_row in summary_indicator.iterrows():
-        ws_stats.cell(row=row, column=1, value=data_row['Suggested Indicator']).border = thin_border
-        ws_stats.cell(row=row, column=2, value=data_row['Classification Type']).border = thin_border
-        ws_stats.cell(row=row, column=3, value=data_row['Count']).border = thin_border
+        for col_idx, val in enumerate([data_row['Suggested Indicator'],
+                                       data_row['Classification Type'],
+                                       data_row['Count']], 1):
+            c = ws_stats.cell(row=row, column=col_idx, value=val)
+            c.font = data_font
+            c.border = thin_border
         cell = ws_stats.cell(row=row, column=4, value=data_row['Percentage'] / 100)
         cell.number_format = '0.00%'
+        cell.font = data_font
         cell.border = thin_border
         row += 1
     row += 1
@@ -823,12 +905,16 @@ def create_excel_output(df, output_path):
     
     for _, data_row in summary_confidence.iterrows():
         cell1 = ws_stats.cell(row=row, column=1, value=data_row['Confidence'])
+        cell1.font = data_font
         cell1.border = thin_border
         if data_row['Confidence'] in conf_colors:
             cell1.fill = conf_colors[data_row['Confidence']]
-        ws_stats.cell(row=row, column=2, value=data_row['Count']).border = thin_border
+        c2 = ws_stats.cell(row=row, column=2, value=data_row['Count'])
+        c2.font = data_font
+        c2.border = thin_border
         cell = ws_stats.cell(row=row, column=3, value=data_row['Percentage'] / 100)
         cell.number_format = '0.00%'
+        cell.font = data_font
         cell.border = thin_border
         row += 1
     row += 1
@@ -845,8 +931,12 @@ def create_excel_output(df, output_path):
     row += 1
     
     for _, data_row in summary_institution.iterrows():
-        ws_stats.cell(row=row, column=1, value=data_row['Institution Name']).border = thin_border
-        ws_stats.cell(row=row, column=2, value=data_row['Count']).border = thin_border
+        c1 = ws_stats.cell(row=row, column=1, value=data_row['Institution Name'])
+        c1.font = data_font
+        c1.border = thin_border
+        c2 = ws_stats.cell(row=row, column=2, value=data_row['Count'])
+        c2.font = data_font
+        c2.border = thin_border
         row += 1
     
     ws_stats.column_dimensions['A'].width = 50
@@ -876,9 +966,13 @@ def create_excel_output(df, output_path):
     row += 1
     
     for inst in crosstab.index:
-        ws_inst.cell(row=row, column=1, value=inst).border = thin_border
+        c = ws_inst.cell(row=row, column=1, value=inst)
+        c.font = data_font
+        c.border = thin_border
         for col_idx, ind in enumerate(crosstab.columns, 2):
-            ws_inst.cell(row=row, column=col_idx, value=int(crosstab.loc[inst, ind])).border = thin_border
+            c = ws_inst.cell(row=row, column=col_idx, value=int(crosstab.loc[inst, ind]))
+            c.font = data_font
+            c.border = thin_border
         row += 1
     
     row += 2
@@ -895,7 +989,7 @@ def create_excel_output(df, output_path):
         row += 1
         samples = other_unknown[other_unknown['Institution Name'] == inst]['Extracted Call Number'].dropna().unique()[:8]
         for sample in samples:
-            ws_inst.cell(row=row, column=2, value=str(sample)[:60])
+            ws_inst.cell(row=row, column=2, value=str(sample)[:60]).font = data_font
             row += 1
         row += 1
     
@@ -932,6 +1026,7 @@ def main(input_path, output_path):
     marc_results = df['Parsed MARC'].apply(get_call_number_from_marc)
     df['Extracted Call Number'] = marc_results.apply(lambda x: x[0])
     df['From $j'] = marc_results.apply(lambda x: x[1])
+    df['J Combined'] = marc_results.apply(lambda x: x[2])
     df['Call Number for Analysis'] = df.apply(
         lambda row: row['Extracted Call Number'] if row['Extracted Call Number'] else row['Permanent Call Number'],
         axis=1
@@ -947,7 +1042,9 @@ def main(input_path, output_path):
     for _, row in df.iterrows():
         cn = row['Call Number for Analysis']
         from_j = row['From $j']
-        result = categorize_call_number(cn, from_j=from_j)
+        j_combined = row['J Combined']
+        institution = row.get('Institution Name')
+        result = categorize_call_number(cn, from_j=from_j, j_combined=j_combined, institution=institution)
         indicators.append(result[0])
         class_types.append(result[1])
         confidences.append(result[2])
