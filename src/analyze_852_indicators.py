@@ -726,7 +726,7 @@ def categorize_call_number(call_num, from_j=False, j_combined=False, institution
         institution: Institution name, used to determine whether to trust
                      the cataloger's $j subfield choice.
 
-    Returns: (indicator, classification_type, confidence, note)
+    Returns: (indicator, classification_type, confidence, note, subfield_changes)
 
     Indicator values:
         0 = Library of Congress
@@ -741,9 +741,10 @@ def categorize_call_number(call_num, from_j=False, j_combined=False, institution
         blank = Unknown/missing
     """
     if pd.isna(call_num) or not call_num:
-        return 'blank', 'Unknown', 'Low', 'Missing call number'
+        return 'blank', 'Unknown', 'Low', 'Missing call number', ''
 
     cn = str(call_num).strip()
+    subfield_changes = []
 
     # === $j SUBFIELD OVERRIDE ===
     # If the call number came from $j AND the institution is trusted,
@@ -752,23 +753,28 @@ def categorize_call_number(call_num, from_j=False, j_combined=False, institution
     if from_j:
         trusted = institution in _TRUSTED_INSTITUTIONS if institution else False
         if trusted:
-            return '4', 'Shelving control number', 'High', 'In $j (shelving control subfield)'
+            return '4', 'Shelving control number', 'High', 'In $j (shelving control subfield)', ''
 
     # === NON-CALL-NUMBERS ===
     not_cn = is_not_a_call_number(cn)
     if not_cn:
         note_map = {
-            'public_note': 'Public note — consider moving to $z',
-            'staff_note': 'Staff/cataloging note — consider moving to $x',
-            'equipment': 'Equipment description — not a standard call number but may be intentional for circulation',
-            'format_descriptor': 'Format descriptor only — not a call number',
+            'public_note': 'Public note',
+            'staff_note': 'Staff/cataloging note',
+            'equipment': 'Equipment description — may be intentional for circulation',
+            'format_descriptor': 'Format descriptor only',
             'test_data': 'Test/placeholder data',
         }
-        return 'N/A', 'Not a call number', 'High', note_map.get(not_cn, 'Not a call number')
+        sf_map = {
+            'public_note': 'Move to $z',
+            'staff_note': 'Move to $x',
+        }
+        sf = sf_map.get(not_cn, '')
+        return 'N/A', 'Not a call number', 'High', note_map.get(not_cn, 'Not a call number'), sf
 
     # === AV SHELVING NUMBERS ===
     if is_av_shelving_number(cn):
-        return '4', 'Shelving control number', 'High', 'AV format shelving'
+        return '4', 'Shelving control number', 'High', 'AV format shelving', ''
 
     # === CHECK FOR PREFIX-ONLY CALL NUMBERS ===
     # Words like "Periodical", "Thesis", "Reference" are $k (call number
@@ -776,9 +782,9 @@ def categorize_call_number(call_num, from_j=False, j_combined=False, institution
     # them, the indicator is ambiguous.
     if cn.upper().strip() in SHELVING_PREFIXES:
         prefix_word = cn.strip()
-        return '8', 'Other scheme', 'Low', (
-            f"'{prefix_word}' should be in $k — used as entire call number, "
-            f"no classification follows. Could be shelving control (4) or other scheme (8)")
+        return ('8', 'Other scheme', 'Low',
+                f"Prefix only — no classification follows. Could be shelving control (4) or other scheme (8)",
+                f"Move '{prefix_word}' to $k")
 
     # === STRIP SHELVING PREFIXES ===
     # Try stripping $k prefixes (OVERSIZE, DOCS, PERIODICAL, THESIS, etc.)
@@ -791,12 +797,13 @@ def categorize_call_number(call_num, from_j=False, j_combined=False, institution
     if result:
         indicator, scheme, conf, note = result
         if prefix_found:
-            note += f" — move '{prefix_found}' to $k"
+            subfield_changes.append(f"Move '{prefix_found}' to $k")
     elif prefix_found:
         # === PREFIX STRIPPED BUT REMAINDER NOT CLASSIFIED ===
-        indicator, scheme, conf, note = '8', 'Other scheme', 'Low', (
-            f"'{prefix_found}' should be in $k — remainder '{cn_stripped}' "
-            f"not a standard classification. Could be shelving control (4) or other scheme (8)")
+        indicator, scheme, conf, note = ('8', 'Other scheme', 'Low',
+            f"Remainder '{cn_stripped}' not a standard classification. "
+            f"Could be shelving control (4) or other scheme (8)")
+        subfield_changes.append(f"Move '{prefix_found}' to $k")
     else:
         # === UNRECOGNIZED ===
         indicator, scheme, conf, note = '8', 'Other scheme', 'Low', 'Pattern not recognized - review recommended'
@@ -805,14 +812,14 @@ def categorize_call_number(call_num, from_j=False, j_combined=False, institution
     # mismatch — the cataloger put it in the shelving control subfield
     # but the content looks like something else.
     if from_j and not (institution and institution in _TRUSTED_INSTITUTIONS):
-        note += ' — in $j but may belong in $h'
+        subfield_changes.append('Move $j to $h (may be miscoded)')
 
     # If $j was combined with $h/$i, the cutter was miscoded in $j
     # instead of $i. Note the subfield error.
     if j_combined:
-        note += ' — move $j cutter to $i'
+        subfield_changes.append('Move $j cutter to $i')
 
-    return indicator, scheme, conf, note
+    return indicator, scheme, conf, note, '; '.join(subfield_changes)
 
 
 # =============================================================================
@@ -841,48 +848,65 @@ def create_excel_output(df, output_path):
     
     # === SHEET 1: Main data ===
     ws_data = wb.active
-    ws_data.title = "852 Indicator Analysis"
-    
+    ws_data.title = "852 Field Analysis"
+
+    change_yes_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+    change_no_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+    change_review_fill = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')
+
     headers = [
         'Permanent Call Number', 'Extracted Call Number', 'Permanent Call Number Type',
         '852 MARC', 'Normalized Call Number', 'Institution Name', 'MMS Id',
-        'Suggested Indicator', 'Classification Type', 'Confidence', 'Notes'
+        'Current Indicator', 'Suggested Indicator', 'Change Needed',
+        'Classification Type', 'Confidence', 'Subfield Changes', 'Notes'
     ]
-    
+
     for col, header in enumerate(headers, 1):
         cell = ws_data.cell(row=1, column=col, value=header)
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal='center', wrap_text=True)
         cell.border = thin_border
-    
+
     for row_idx, row in df.iterrows():
         data = [
             row['Permanent Call Number'], row['Extracted Call Number'],
             row['Permanent Call Number Type'], row['852 MARC'],
             row['Normalized Call Number'], row['Institution Name'], row['MMS Id'],
-            row['Suggested Indicator'], row['Classification Type'],
-            row['Confidence'], row['Notes']
+            row['Current Indicator'], row['Suggested Indicator'], row['Change Needed'],
+            row['Classification Type'], row['Confidence'],
+            row['Subfield Changes'], row['Notes']
         ]
         for col_idx, value in enumerate(data, 1):
             cell = ws_data.cell(row=row_idx + 2, column=col_idx, value=value)
             cell.font = data_font
             cell.border = thin_border
-            if col_idx == 10 and value in conf_colors:
+            # Change Needed column coloring
+            if col_idx == 10:
+                if value == 'Yes':
+                    cell.fill = change_yes_fill
+                elif value == 'No':
+                    cell.fill = change_no_fill
+                elif value == 'Review':
+                    cell.fill = change_review_fill
+            # Confidence column coloring
+            if col_idx == 12 and value in conf_colors:
                 cell.fill = conf_colors[value]
-            if col_idx == 9 and value == 'Not a call number':
+            # Not a call number highlighting
+            if col_idx == 11 and value == 'Not a call number':
                 cell.fill = not_cn_fill
                 cell.font = Font(name='Arial', size=12, bold=True)
-    
+
     col_widths = {
         'A': 35, 'B': 30, 'C': 25, 'D': 60, 'E': 45,
-        'F': 30, 'G': 20, 'H': 18, 'I': 28, 'J': 12, 'K': 55
+        'F': 30, 'G': 20, 'H': 18, 'I': 18, 'J': 15,
+        'K': 28, 'L': 12, 'M': 40, 'N': 55
     }
     for col, width in col_widths.items():
         ws_data.column_dimensions[col].width = width
-    
+
     ws_data.freeze_panes = 'A2'
-    ws_data.auto_filter.ref = f"A1:K{len(df) + 1}"
+    ws_data.auto_filter.ref = f"A1:N{len(df) + 1}"
     
     # === SHEET 2: Statistics ===
     ws_stats = wb.create_sheet("Statistics")
@@ -1077,12 +1101,19 @@ def main(input_path, output_path):
         axis=1
     )
 
+    # Extract current indicator from parsed MARC
+    # Use 'blank' for empty/missing indicators so they display clearly
+    df['Current Indicator'] = df['Parsed MARC'].apply(
+        lambda x: x.get('indicator1', '') if x else '').apply(
+        lambda v: v if v else 'blank')
+
     # Classify each call number
     print("Classifying call numbers...")
     indicators = []
     class_types = []
     confidences = []
     notes = []
+    subfield_changes = []
 
     for _, row in df.iterrows():
         cn = row['Call Number for Analysis']
@@ -1094,11 +1125,26 @@ def main(input_path, output_path):
         class_types.append(result[1])
         confidences.append(result[2])
         notes.append(result[3])
-    
+        subfield_changes.append(result[4])
+
     df['Suggested Indicator'] = indicators
     df['Classification Type'] = class_types
     df['Confidence'] = confidences
     df['Notes'] = notes
+    df['Subfield Changes'] = subfield_changes
+
+    # Compare current vs suggested indicator
+    df['Change Needed'] = df.apply(
+        lambda row: 'Yes' if row['Current Indicator'] != row['Suggested Indicator']
+                          and row['Suggested Indicator'] not in ['blank', 'N/A']
+                     else ('Review' if row['Suggested Indicator'] in ['N/A']
+                           else 'No'),
+        axis=1)
+
+    # Suppressed column — populated when input data includes suppression status.
+    # For Analytics exports without this field, defaults to empty.
+    if 'Suppressed' not in df.columns:
+        df['Suppressed'] = ''
     
     # Print summary
     print("\nClassification Summary:")
