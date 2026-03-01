@@ -35,10 +35,10 @@ In consortium environments (like CUNY, SUNY, CSU, etc.), local schemes vary by c
 |-------------|---------------|-------------|
 | City College | `05 .S381 KB V.2` | Music library shelving scheme |
 | City College | `102 102` | Numeric local scheme |
-| Queens College | `BRL 200-11` | Special collection codes |
+| Hostos | `Browse D`, `Browse L` | Browsing collection by author last name initial |
 | Hunter College | `ALLIGER.1.BOOK` | Named collection |
 | Hunter College | `81-1009` | Accession numbers |
-| Hostos | `Browse D`, `Browse L` | Browsing collection by author last name initial |
+| Queens College | `BRL 200-11` | Special collection codes |
 
 **Recommendations for consortium data:**
 
