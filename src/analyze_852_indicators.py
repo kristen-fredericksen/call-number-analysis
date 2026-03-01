@@ -857,6 +857,7 @@ def create_excel_output(df, output_path):
     headers = [
         'Permanent Call Number', 'Extracted Call Number', 'Permanent Call Number Type',
         '852 MARC', 'Normalized Call Number', 'Institution Name', 'MMS Id',
+        'Holdings ID', 'Suppressed',
         'Current Indicator', 'Suggested Indicator', 'Change Needed',
         'Classification Type', 'Confidence', 'Subfield Changes', 'Notes'
     ]
@@ -873,6 +874,7 @@ def create_excel_output(df, output_path):
             row['Permanent Call Number'], row['Extracted Call Number'],
             row['Permanent Call Number Type'], row['852 MARC'],
             row['Normalized Call Number'], row['Institution Name'], row['MMS Id'],
+            row['Holdings ID'], row['Suppressed'],
             row['Current Indicator'], row['Suggested Indicator'], row['Change Needed'],
             row['Classification Type'], row['Confidence'],
             row['Subfield Changes'], row['Notes']
@@ -881,32 +883,33 @@ def create_excel_output(df, output_path):
             cell = ws_data.cell(row=row_idx + 2, column=col_idx, value=value)
             cell.font = data_font
             cell.border = thin_border
-            # Change Needed column coloring
-            if col_idx == 10:
+            # Change Needed column coloring (column 12)
+            if col_idx == 12:
                 if value == 'Yes':
                     cell.fill = change_yes_fill
                 elif value == 'No':
                     cell.fill = change_no_fill
                 elif value == 'Review':
                     cell.fill = change_review_fill
-            # Confidence column coloring
-            if col_idx == 12 and value in conf_colors:
+            # Confidence column coloring (column 14)
+            if col_idx == 14 and value in conf_colors:
                 cell.fill = conf_colors[value]
-            # Not a call number highlighting
-            if col_idx == 11 and value == 'Not a call number':
+            # Not a call number highlighting (column 13)
+            if col_idx == 13 and value == 'Not a call number':
                 cell.fill = not_cn_fill
                 cell.font = Font(name='Arial', size=12, bold=True)
 
     col_widths = {
         'A': 35, 'B': 30, 'C': 25, 'D': 60, 'E': 45,
-        'F': 30, 'G': 20, 'H': 18, 'I': 18, 'J': 15,
-        'K': 28, 'L': 12, 'M': 40, 'N': 55
+        'F': 30, 'G': 20, 'H': 20, 'I': 15,
+        'J': 18, 'K': 18, 'L': 15,
+        'M': 28, 'N': 12, 'O': 40, 'P': 55
     }
     for col, width in col_widths.items():
         ws_data.column_dimensions[col].width = width
 
     ws_data.freeze_panes = 'A2'
-    ws_data.auto_filter.ref = f"A1:N{len(df) + 1}"
+    ws_data.auto_filter.ref = f"A1:P{len(df) + 1}"
     
     # === SHEET 2: Statistics ===
     ws_stats = wb.create_sheet("Statistics")
@@ -1076,16 +1079,34 @@ def create_excel_output(df, output_path):
 
 def main(input_path, output_path):
     """Main processing function."""
-    
+
     print(f"Loading {input_path}...")
-    
-    # Load data (skip header rows typical in Alma Analytics exports)
-    df = pd.read_excel(input_path, skiprows=2, header=None)
-    df.columns = [
-        'Permanent Call Number', 'Permanent Call Number Type', '852 MARC',
-        'Normalized Call Number', 'Institution Name', 'MMS Id'
-    ]
-    df = df.iloc[1:].reset_index(drop=True)
+
+    # Detect input format: pull script output (headers in row 1) vs
+    # Alma Analytics export (3 header rows to skip, 6 columns).
+    # Try reading with headers first; fall back to Analytics format.
+    df_peek = pd.read_excel(input_path, nrows=3, header=None)
+    first_cell = str(df_peek.iloc[0, 0]) if not pd.isna(df_peek.iloc[0, 0]) else ''
+
+    if first_cell in ('Permanent Call Number', 'MMS Id', '852 MARC',
+                       'Holdings ID', 'Institution Name', 'Suppressed'):
+        # Pull script output or clean format — headers in row 1
+        df = pd.read_excel(input_path)
+    else:
+        # Alma Analytics export — skip header rows and assign columns
+        df = pd.read_excel(input_path, skiprows=2, header=None)
+        df.columns = [
+            'Permanent Call Number', 'Permanent Call Number Type', '852 MARC',
+            'Normalized Call Number', 'Institution Name', 'MMS Id'
+        ]
+        df = df.iloc[1:].reset_index(drop=True)
+
+    # Ensure expected columns exist (fill missing ones with empty strings)
+    for col in ['Permanent Call Number', 'Permanent Call Number Type', '852 MARC',
+                'Normalized Call Number', 'Institution Name', 'MMS Id',
+                'Holdings ID', 'Suppressed']:
+        if col not in df.columns:
+            df[col] = ''
     
     print(f"Loaded {len(df)} records")
     
