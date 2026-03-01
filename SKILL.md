@@ -258,7 +258,7 @@ Source: [MARC 21 Format for Holdings Data: 852](https://www.loc.gov/marc/holding
 
 | Subfield | Name | Use |
 |----------|------|-----|
-| **$$h** | Classification part | The classification portion (e.g., `N620 .F6` for LC) |
+| **$$h** | Classification part | The classification portion (e.g., `N620.F6` for LC) |
 | **$$i** | Item part | Cutter, date, volume (e.g., `A85 2015`) — append to $$h |
 | **$$j** | Shelving control number | Used *instead of* $$h/$$i for indicator 4 |
 | **$$k** | Call number prefix | Shelving prefix — **ignore for classification** (see Prefixes vs. Schemes below) |
@@ -268,12 +268,12 @@ Source: [MARC 21 Format for Holdings Data: 852](https://www.loc.gov/marc/holding
 
 **Example:**
 ```
-Permanent Call Number: FOLIO N620 .F6 A85
-852 MARC: 852_0 $$a NBC $$b BC001 $$c FOLIO $$h N620 .F6 $$i A85 $$k FOLIO
+Permanent Call Number: FOLIO N620.F6 A85
+852 MARC: 852_0 $$a NBC $$b BC001 $$c FOLIO $$h N620.F6 $$i A85 $$k FOLIO
 ```
 
-- **Wrong approach**: Analyze "FOLIO N620 .F6 A85" → might see FOLIO as class letters
-- **Correct approach**: Extract $$h + $$i = "N620 .F6 A85" → clearly LC class N (Fine Arts)
+- **Wrong approach**: Analyze "FOLIO N620.F6 A85" → might see FOLIO as class letters
+- **Correct approach**: Extract $$h + $$i = "N620.F6 A85" → clearly LC class N (Fine Arts)
 
 **Extraction logic:**
 1. If $$j exists → use $$j (shelving control number)
@@ -291,7 +291,7 @@ Many "gray area" call numbers are actually **$k prefix values** that got concate
 |--------|---------|--------------------------|--------------|
 | REFERENCE, REF | Reference collection | `Reference HD6331 .S7` | `$k Reference $h HD6331 $i .S7` (indicator 0) |
 | OVERSIZE | Oversize shelving | `OVERSIZE G 3860 1994 .H37` | `$k OVERSIZE $h G 3860 1994 $i .H37` (indicator 0) |
-| FOLIO, QUARTO | Size-based shelving | `FOLIO N620 .F6 A85` | `$k FOLIO $h N620 .F6 $i A85` (indicator 0) |
+| FOLIO, QUARTO | Size-based shelving | `FOLIO N620.F6 A85` | `$k FOLIO $h N620.F6 $i A85` (indicator 0) |
 | PERIODICAL, PER | Periodicals area | `Periodical QA76.73 .P98` | `$k Periodical $h QA76.73 $i .P98` (indicator 0) |
 | THESIS, DISSERTATION | Thesis collection | `Thesis HD6331 .S7` | `$k Thesis $h HD6331 $i .S7` (indicator 0) |
 | SERIAL, SERIALS | Serials area | `Serial QA76 .B3` | `$k Serial $h QA76 $i .B3` (indicator 0) |

@@ -760,7 +760,7 @@ def categorize_call_number(call_num, from_j=False, j_combined=False, institution
         note_map = {
             'public_note': 'Public note — consider moving to $z',
             'staff_note': 'Staff/cataloging note — consider moving to $x',
-            'equipment': 'Equipment/supply — not an information resource',
+            'equipment': 'Equipment description — not a standard call number but may be intentional for circulation',
             'format_descriptor': 'Format descriptor only — not a call number',
             'test_data': 'Test/placeholder data',
         }
