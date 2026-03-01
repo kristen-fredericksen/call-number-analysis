@@ -264,12 +264,18 @@ def rows_to_dataframe(column_names, rows):
         if col in ('Column 0', '0', 'Dummy') or 'DESCRIPTOR' in str(col).upper():
             df = df.drop(columns=[col])
 
-    # Rename columns to match what the analysis script expects
+    # Rename columns to match what the analysis script expects.
+    # Use exact match first to avoid substring collisions (e.g.,
+    # "Permanent Call Number" matching "Permanent Call Number Type").
     rename_map = {}
     for analytics_name, script_name in ANALYTICS_TO_SCRIPT_COLUMNS.items():
-        # Find the column (may be exact match or contained in a longer name)
+        # Try exact match first
+        if analytics_name in df.columns and analytics_name not in rename_map:
+            rename_map[analytics_name] = script_name
+            continue
+        # Fall back to substring match
         for col in df.columns:
-            if analytics_name in str(col):
+            if analytics_name in str(col) and col not in rename_map:
                 rename_map[col] = script_name
                 break
     df = df.rename(columns=rename_map)

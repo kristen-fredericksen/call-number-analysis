@@ -1,26 +1,39 @@
-# Call Number Analysis
+# CUNY Call Number Cleanup
 
-Detect miscoded MARC 852 first indicators by analyzing call number content rather than trusting the indicator value.
+Tools for systematically cleaning up MARC 852 fields across all 23 CUNY campuses. Pulls holdings data from Alma Analytics, analyzes every call number by content to identify indicator errors and subfield problems, and generates reports for campus catalogers.
 
 ## The Problem
 
-The MARC 852 field's first indicator declares what classification scheme a call number uses (0 = LC, 1 = Dewey, 3 = SuDoc, etc.). In real-world library data, these indicators are frequently wrong. When Alma Analytics normalizes call numbers, it relies on the indicator to decide *how* to normalize -- so a miscoded indicator produces garbled output. For example, an LC call number like `QA24.D56` coded as indicator 8 ("Other scheme") gets zero-padded into `8qa000000000024.d000000000056...` instead of the correct `0qa!24 d56`.
+CUNY's 23 libraries have hundreds of thousands of holdings records with 852 field issues:
 
-This project detects these mismatches using content-based analysis: examining what the call number actually looks like rather than what the indicator says it is.
+- **Wrong first indicators** -- An LC call number coded as indicator 8 ("Other scheme") causes Alma Analytics to normalize it incorrectly, producing garbled output like `8qa000000000024.d000000000056...` instead of `0qa!24 d56`
+- **Subfield coding errors** -- Cutters placed in $j instead of $i, classification data in the wrong subfield, prefixes not in $k
+- **Non-call-number data** -- Staff notes, equipment descriptions, and shelving instructions entered in call number fields
+
+This project identifies all of these by analyzing what each call number actually looks like, rather than trusting the indicator value.
+
+## Workflow
+
+1. **Pull** -- Retrieve all 852 data for a school from Alma Analytics via the API
+2. **Analyze** -- Classify every call number, compare current vs suggested indicator, flag subfield errors
+3. **Report** -- Send reports to campus catalogers showing what changes will be made
+4. **Correct** -- Apply uncontested corrections via the Holdings API (planned)
+
+Schools are processed one at a time, starting with trusted cataloging departments (Kingsborough CC, BMCC) before expanding to campuses with known data quality issues.
 
 ## What's Included
 
-### Claude Skill (`SKILL.md`)
+| File | Purpose |
+|------|---------|
+| `src/pull_852_analytics.py` | Pulls 852 data from the Alma Analytics API with pagination |
+| `src/analyze_852_indicators.py` | Classifies call numbers, compares indicators, flags errors |
+| `SKILL.md` | Classification rules, decision tree, and reference material for Claude |
+| `docs/analytics-report.md` | Analytics report setup (columns, filters, paths per school) |
+| `api_keys.env` | IZ API keys per school (not in git) |
 
-A standalone skill document containing classification rules, a decision tree, Alma Analytics normalization details, and a workflow checklist. Can be used directly with Claude to analyze call numbers interactively. Also contributed to [cuny-libraries/claude-skills](https://github.com/cuny-libraries/claude-skills).
+## Classification
 
-### Python Script (`src/analyze_852_indicators.py`)
-
-A batch analysis script that implements the skill's classification logic against Excel exports from Alma Analytics. It reads an input spreadsheet, classifies every call number, and produces a formatted output workbook with three sheets: detailed analysis, statistics, and institution breakdown.
-
-## Suggested Indicators
-
-For each call number, the script and skill suggest the correct 852 first indicator based on content analysis:
+The analysis script suggests the correct 852 first indicator based on content:
 
 | Indicator | Scheme | Examples |
 |-----------|--------|----------|
@@ -33,53 +46,41 @@ For each call number, the script and skill suggest the correct 852 first indicat
 | 8 | Other scheme | Call numbers that don't match any known scheme |
 | -- | Not a call number | `Digital Projector`, `SHELVED UNDER TITLE` |
 
-Additional features:
-- Strips $k prefixes (OVERSIZE, PERIODICAL, THESIS, DISSERTATION, DOCS, REF, etc.) before classification
-- Flags prefix-only call numbers (e.g., just "Periodical" or "Thesis") for human review
-- Detects equipment, format descriptors, staff notes, and test data in call number fields
-- Reports confidence levels (High, Medium, Low) for each classification
-- Handles consortium data with per-institution breakdowns
+The output flags each record as Change Needed (Yes/No/Review) with color coding, and separates subfield errors from classification notes.
 
 ## Usage
 
 ### Requirements
 
-- Python 3.x
-- pandas
-- openpyxl
-
 ```bash
-pip install pandas openpyxl
+pip install pandas openpyxl requests
 ```
 
-### Running the Script
+### Pull data
+
+Each school needs an API key in `api_keys.env` and a report path in the script's `REPORT_PATHS` dict. See `docs/analytics-report.md` for report setup.
 
 ```bash
-python src/analyze_852_indicators.py input.xlsx output.xlsx
+python src/pull_852_analytics.py KB           # Pull one school
+python src/pull_852_analytics.py KB BM        # Pull multiple schools
+python src/pull_852_analytics.py --all        # Pull all schools with keys
 ```
 
-### Input Format
+### Analyze
 
-Excel (.xlsx) exports from Alma Analytics with these columns:
+```bash
+python src/analyze_852_indicators.py data/KB_852_data.xlsx data/KB_852_analyzed.xlsx
+```
 
-| Column | Description |
-|--------|-------------|
-| Permanent Call Number | The call number as stored |
-| Permanent Call Number Type | Alma's classification type |
-| 852 MARC | Full MARC 852 field with subfields |
-| Normalized Call Number | Alma's normalized form |
-| Institution Name | Owning institution |
-| MMS Id | Alma record identifier |
-
-The script skips 2 header rows and 1 sub-header row typical of Alma Analytics exports.
+The script auto-detects whether the input is from the pull script or a manual Alma Analytics export.
 
 ### Output
 
 A formatted Excel workbook with three sheets:
 
-1. **Analysis** -- every record with suggested indicator, classification type, confidence level, and explanatory notes
+1. **852 Field Analysis** -- every record with current and suggested indicators, change needed flag, classification type, confidence, subfield changes, and notes
 2. **Statistics** -- counts and percentages by classification type and confidence
-3. **By Institution** -- breakdown of classifications per institution (useful for consortium data)
+3. **By Institution** -- breakdown per campus
 
 ## References
 

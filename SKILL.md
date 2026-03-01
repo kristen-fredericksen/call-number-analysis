@@ -276,10 +276,11 @@ Permanent Call Number: FOLIO N620.F6 A85
 - **Correct approach**: Extract $$h + $$i = "N620.F6 A85" → clearly LC class N (Fine Arts)
 
 **Extraction logic:**
-1. If $$j exists → use $$j (shelving control number)
-2. Otherwise → use $$h + $$i (classification + item)
-3. Always ignore $$k (prefix) for classification purposes
-4. The prefix may appear at the end of normalized call numbers but doesn't affect scheme identification
+1. If $$h (or $$i) and $$j both exist → combine $$h + $$i + $$j (the $$j is likely a miscoded $$i — classify the combined value, note the subfield error)
+2. If only $$j exists → use $$j (shelving control number)
+3. Otherwise → use $$h + $$i (classification + item)
+4. Always ignore $$k (prefix) for classification purposes
+5. The prefix may appear at the end of normalized call numbers but doesn't affect scheme identification
 
 ### Prefixes ($k) vs. Local Classification Schemes (Indicator 8)
 
