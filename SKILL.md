@@ -38,7 +38,7 @@ In consortium environments (like CUNY, SUNY, CSU, etc.), local schemes vary by c
 | Queens College | `BRL 200-11` | Special collection codes |
 | Hunter College | `ALLIGER.1.BOOK` | Named collection |
 | Hunter College | `81-1009` | Accession numbers |
-| Hostos | `Browse D`, `Browse G` | Browsing collection by subject |
+| Hostos | `Browse D`, `Browse G` | Browsing collection by author's last name |
 
 **Recommendations for consortium data:**
 
