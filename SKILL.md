@@ -276,7 +276,9 @@ Permanent Call Number: FOLIO N620.F6 A85
 - **Correct approach**: Extract $$h + $$i = "N620.F6 A85" → clearly LC class N (Fine Arts)
 
 **Extraction logic:**
-1. If $$h (or $$i) and $$j both exist → combine $$h + $$i + $$j (the $$j is likely a miscoded $$i — classify the combined value, note the subfield error)
+1. If $$h (or $$i) and $$j both exist:
+   - If $$j looks like a shelving control number (e.g., `DVD 521`, `CD 1811`) → classify from $$h/$$i only, flag for review (two schemes in one 852 field)
+   - Otherwise → combine $$h + $$i + $$j (the $$j is likely a miscoded $$i — classify the combined value, note the subfield error)
 2. If only $$j exists → use $$j (shelving control number)
 3. Otherwise → use $$h + $$i (classification + item)
 4. Always ignore $$k (prefix) for classification purposes

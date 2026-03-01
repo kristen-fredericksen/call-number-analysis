@@ -7,7 +7,8 @@ call number content. Developed for CUNY consortium data but applicable to
 any library using LC, Dewey, SuDoc, NLM, or local classification schemes.
 
 Usage:
-    python analyze_852_indicators.py input.xlsx output.xlsx
+    python analyze_852_indicators.py input.xlsx              # auto-generates timestamped output
+    python analyze_852_indicators.py input.xlsx output.xlsx  # custom output name
 
 Input file should have columns:
     - Permanent Call Number
@@ -27,6 +28,8 @@ Version: 1.0
 import pandas as pd
 import re
 import sys
+from datetime import datetime
+from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
@@ -69,6 +72,21 @@ def parse_852_marc(marc_field):
     return result
 
 
+def _looks_like_shelving_control(value):
+    """
+    Check if a $j value looks like a shelving control number
+    (format + accession number) rather than a miscoded cutter.
+
+    Examples that ARE shelving control: DVD 521, CD 1811, Video disc 110
+    Examples that are NOT (miscoded cutters): .A85, M53, R74
+    """
+    # AV format prefix + number pattern
+    av_pattern = r'^(DVD|CD|VHS|Video|Fiche|Disc|Tape|Cassette)\b'
+    if re.match(av_pattern, value.strip(), re.IGNORECASE):
+        return True
+    return False
+
+
 def get_call_number_from_marc(parsed_marc):
     """
     Extract the actual call number from parsed 852, using $$h and $$i (or $$j).
@@ -80,12 +98,14 @@ def get_call_number_from_marc(parsed_marc):
     - $$j (shelving control number) - used for indicator 4
     - $$h + $$i (classification + item) - used for LC, Dewey, etc.
 
-    Returns: (call_number, from_j, j_combined) where from_j is True if the
-    value came from $$j alone, and j_combined is True if $$j was merged with
-    $$h/$$i (meaning the cutter was miscoded in $$j instead of $$i).
+    Returns: (call_number, from_j, j_combined, j_conflict) where:
+    - from_j: True if value came from $$j alone
+    - j_combined: True if $$j was merged with $$h/$$i (miscoded cutter)
+    - j_conflict: True if $$h has a classification AND $$j has a separate
+      shelving control number (conflicting schemes in one 852 field)
     """
     if not parsed_marc:
-        return None, False, False
+        return None, False, False, False
 
     subfields = parsed_marc.get('subfields', {})
 
@@ -95,19 +115,25 @@ def get_call_number_from_marc(parsed_marc):
 
     if j:
         if h or i:
-            # $j alongside $h or $i — the call number is split across
-            # subfields. $j is the item part of a classified call number,
-            # not a standalone shelving control number.
+            if _looks_like_shelving_control(j):
+                # $h has a classification and $j has a separate shelving
+                # control number — two schemes in one field. Classify
+                # from $h/$i only; flag the conflict.
+                if i:
+                    return f"{h} {i}".strip(), False, False, True
+                return h.strip(), False, False, True
+            # $j alongside $h/$i but $j doesn't look like a shelving
+            # control number — likely a miscoded cutter.
             parts = [p for p in [h, i, j] if p]
-            return ' '.join(parts).strip(), False, True
+            return ' '.join(parts).strip(), False, True, False
         # $j only (no $h or $i) — standalone shelving control number
-        return j.strip(), True, False
+        return j.strip(), True, False, False
     elif h:
         if i:
-            return f"{h} {i}".strip(), False, False
-        return h.strip(), False, False
+            return f"{h} {i}".strip(), False, False, False
+        return h.strip(), False, False, False
 
-    return None, False, False
+    return None, False, False, False
 
 
 # =============================================================================
@@ -651,6 +677,21 @@ def _classify_call_number(cn_stripped):
     if is_dew:
         return '1', 'Dewey Decimal', conf, note
 
+    # === LOCAL RESERVE LABELS ===
+    # Abbreviated title + year + edition (e.g., "Am 2014 4th Ed",
+    # "CJ 2017 3rd Ed"). These are local shelving labels for course
+    # reserves, not classification numbers. Check before LC to prevent
+    # false matches on valid LC class letters.
+    if re.match(r'^[A-Z]{1,3}\s*\d{4}\s+\d+(st|nd|rd|th)\s+Ed',
+                 cn_stripped, re.IGNORECASE):
+        return '8', 'Other scheme', 'Medium', 'Local shelving label (title abbreviation + edition)'
+    # Letters + small number + year, no cutter (e.g., "RM 30 2016").
+    # Real LC call numbers with a date almost always have a cutter
+    # between the class number and the date.
+    if re.match(r'^[A-Z]{1,3}\s+\d{1,2}\s+\d{4}\s*$',
+                 cn_stripped, re.IGNORECASE):
+        return '8', 'Other scheme', 'Medium', 'Local shelving label (title abbreviation + year)'
+
     # === LC CLASSIFICATION ===
     if class_letters and is_valid_lc_class(class_letters):
         # CIP/preliminary LC (MLCS pattern)
@@ -706,25 +747,25 @@ def _classify_call_number(cn_stripped):
 # MAIN CLASSIFICATION FUNCTION
 # =============================================================================
 
-_TRUSTED_INSTITUTIONS = {
-    'Kingsborough Community College',
-    'Borough of Manhattan Community College',
-}
-
-
-def categorize_call_number(call_num, from_j=False, j_combined=False, institution=None):
+def categorize_call_number(call_num, from_j=False, j_combined=False,
+                           j_conflict=False, institution=None):
     """
     Analyze a call number and suggest the appropriate 852 first indicator.
 
+    Always classifies by content, regardless of which subfield the data
+    came from. If the content is in $j but looks like a standard
+    classification (LC, Dewey, etc.), the script flags it as a subfield
+    error rather than accepting it as shelving control.
+
     Args:
         call_num: The call number string to classify.
-        from_j: True if the call number came from MARC 852 $j (shelving
-                control number subfield). If True AND the institution is
-                trusted, the call number is treated as indicator 4. If the
-                institution is not trusted, the call number is classified
-                normally and the $j placement is noted.
-        institution: Institution name, used to determine whether to trust
-                     the cataloger's $j subfield choice.
+        from_j: True if the call number came from MARC 852 $j. If the
+                content is not a shelving control number, $j was used
+                by mistake and a subfield change is noted.
+        j_combined: True if $j was merged with $h/$i (miscoded cutter).
+        j_conflict: True if $h has a classification AND $j has a separate
+                    shelving control number (two schemes in one 852 field).
+        institution: Institution name for per-campus analysis.
 
     Returns: (indicator, classification_type, confidence, note, subfield_changes)
 
@@ -746,16 +787,9 @@ def categorize_call_number(call_num, from_j=False, j_combined=False, institution
     cn = str(call_num).strip()
     subfield_changes = []
 
-    # === $j SUBFIELD OVERRIDE ===
-    # If the call number came from $j AND the institution is trusted,
-    # treat it as shelving control — the cataloger deliberately chose $j.
-    # At untrusted institutions, classify normally and note the $j placement.
-    if from_j:
-        trusted = institution in _TRUSTED_INSTITUTIONS if institution else False
-        if trusted:
-            return '4', 'Shelving control number', 'High', 'In $j (shelving control subfield)', ''
-
     # === NON-CALL-NUMBERS ===
+    # Check this BEFORE the $j override — "DVD" alone is a format
+    # descriptor even if a trusted institution put it in $j.
     not_cn = is_not_a_call_number(cn)
     if not_cn:
         note_map = {
@@ -808,16 +842,23 @@ def categorize_call_number(call_num, from_j=False, j_combined=False, institution
         # === UNRECOGNIZED ===
         indicator, scheme, conf, note = '8', 'Other scheme', 'Low', 'Pattern not recognized - review recommended'
 
-    # If the value came from $j at an untrusted institution, note the
-    # mismatch — the cataloger put it in the shelving control subfield
-    # but the content looks like something else.
-    if from_j and not (institution and institution in _TRUSTED_INSTITUTIONS):
-        subfield_changes.append('Move $j to $h (may be miscoded)')
+    # If the value came from $j, check whether $j is appropriate.
+    # $j is for shelving control numbers (indicator 4). If the content
+    # is a standard classification, $j was used by mistake.
+    if from_j and indicator != '4':
+        subfield_changes.append('Move $j to $h')
 
     # If $j was combined with $h/$i, the cutter was miscoded in $j
     # instead of $i. Note the subfield error.
     if j_combined:
         subfield_changes.append('Move $j cutter to $i')
+
+    # If $h has a classification and $j has a separate shelving control
+    # number, flag for review — two schemes in one 852 field.
+    if j_conflict:
+        indicator = 'N/A'
+        note = f'{scheme} in $h but shelving control number in $j — review needed'
+        conf = 'Review'
 
     return indicator, scheme, conf, note, '; '.join(subfield_changes)
 
@@ -850,9 +891,17 @@ def create_excel_output(df, output_path):
     ws_data = wb.active
     ws_data.title = "852 Field Analysis"
 
+    # Force ID columns to string to prevent scientific notation
+    for col in ['MMS Id', 'Holdings ID']:
+        if col in df.columns:
+            df[col] = df[col].astype(str)
+
     change_yes_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
     change_no_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
     change_review_fill = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')
+
+    # ID columns (MMS Id = 7, Holdings ID = 8) — stored as text
+    id_col_indices = {7, 8}
 
     headers = [
         'Permanent Call Number', 'Extracted Call Number', 'Permanent Call Number Type',
@@ -883,6 +932,8 @@ def create_excel_output(df, output_path):
             cell = ws_data.cell(row=row_idx + 2, column=col_idx, value=value)
             cell.font = data_font
             cell.border = thin_border
+            if col_idx in id_col_indices:
+                cell.number_format = '@'
             # Change Needed column coloring (column 12)
             if col_idx == 12:
                 if value == 'Yes':
@@ -1117,6 +1168,7 @@ def main(input_path, output_path):
     df['Extracted Call Number'] = marc_results.apply(lambda x: x[0])
     df['From $j'] = marc_results.apply(lambda x: x[1])
     df['J Combined'] = marc_results.apply(lambda x: x[2])
+    df['J Conflict'] = marc_results.apply(lambda x: x[3])
     df['Call Number for Analysis'] = df.apply(
         lambda row: row['Extracted Call Number'] if row['Extracted Call Number'] else row['Permanent Call Number'],
         axis=1
@@ -1140,8 +1192,10 @@ def main(input_path, output_path):
         cn = row['Call Number for Analysis']
         from_j = row['From $j']
         j_combined = row['J Combined']
+        j_conflict = row['J Conflict']
         institution = row.get('Institution Name')
-        result = categorize_call_number(cn, from_j=from_j, j_combined=j_combined, institution=institution)
+        result = categorize_call_number(cn, from_j=from_j, j_combined=j_combined,
+                                        j_conflict=j_conflict, institution=institution)
         indicators.append(result[0])
         class_types.append(result[1])
         confidences.append(result[2])
@@ -1182,8 +1236,24 @@ def main(input_path, output_path):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3:
-        print(f"Usage: {sys.argv[0]} input.xlsx output.xlsx")
+    if len(sys.argv) < 2 or len(sys.argv) > 3:
+        print(f"Usage: {sys.argv[0]} input.xlsx [output.xlsx]")
         sys.exit(1)
-    
-    main(sys.argv[1], sys.argv[2])
+
+    input_file = sys.argv[1]
+
+    if len(sys.argv) == 3:
+        output_file = sys.argv[2]
+    else:
+        # Auto-generate timestamped output name from input name
+        # e.g., KB_852_data_20260301_120236.xlsx → KB_852_analyzed_20260301_120236_HHMMSS.xlsx
+        stem = Path(input_file).stem
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        # Replace "_data" with "_analyzed" if present, otherwise append "_analyzed"
+        if '_data' in stem:
+            out_stem = stem.replace('_data', '_analyzed', 1)
+        else:
+            out_stem = f"{stem}_analyzed"
+        output_file = str(Path(input_file).parent / f"{out_stem}_{timestamp}.xlsx")
+
+    main(input_file, output_file)

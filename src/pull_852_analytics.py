@@ -11,7 +11,7 @@ Usage:
     python pull_852_analytics.py KB BM           # Pull Kingsborough and BMCC
     python pull_852_analytics.py --all           # Pull all schools with keys
 
-Output: data/{school_code}_852_data.xlsx (one file per school)
+Output: data/{school_code}_852_data_{timestamp}.xlsx (one file per school)
 
 Requires: api_keys.env in the project root with IZ API keys.
 """
@@ -19,6 +19,7 @@ Requires: api_keys.env in the project root with IZ API keys.
 import os
 import sys
 import time
+from datetime import datetime
 import requests
 import xml.etree.ElementTree as ET
 import pandas as pd
@@ -288,6 +289,13 @@ def save_to_excel(df, output_path):
     data_font = Font(name='Arial', size=12)
     header_font = Font(name='Arial', size=12, bold=True)
 
+    # Force ID columns to string so Excel doesn't convert them to
+    # scientific notation (which loses digits on long numbers).
+    id_columns = {'MMS Id', 'Holdings ID'}
+    for col in id_columns:
+        if col in df.columns:
+            df[col] = df[col].astype(str)
+
     wb = Workbook()
     ws = wb.active
     ws.title = "Analytics Data"
@@ -300,8 +308,12 @@ def save_to_excel(df, output_path):
     # Write data
     for row_idx, row in df.iterrows():
         for col_idx, value in enumerate(row, 1):
+            col_name = df.columns[col_idx - 1]
             cell = ws.cell(row=row_idx + 2, column=col_idx, value=value)
             cell.font = data_font
+            # Store IDs as explicit text to prevent scientific notation
+            if col_name in id_columns:
+                cell.number_format = '@'
 
     # Auto-width columns
     for col_idx, col_name in enumerate(df.columns, 1):
@@ -380,7 +392,8 @@ def main():
         print(f"  Records after cleanup: {len(df)}")
 
         # Save
-        output_path = data_dir / f"{code}_852_data.xlsx"
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_path = data_dir / f"{code}_852_data_{timestamp}.xlsx"
         save_to_excel(df, output_path)
         print(f"  Saved to: {output_path}")
 
