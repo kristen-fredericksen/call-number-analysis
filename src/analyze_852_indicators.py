@@ -72,31 +72,33 @@ def parse_852_marc(marc_field):
 def get_call_number_from_marc(parsed_marc):
     """
     Extract the actual call number from parsed 852, using $$h and $$i (or $$j).
-    
+
     IMPORTANT: Ignores $$k (prefix) for classification purposes.
     The prefix (FOLIO, REF, OVERSIZE, etc.) should not affect scheme identification.
-    
+
     Subfield priority:
     - $$j (shelving control number) - used for indicator 4
     - $$h + $$i (classification + item) - used for LC, Dewey, etc.
+
+    Returns: (call_number, from_j) where from_j is True if the value came from $$j.
     """
     if not parsed_marc:
-        return None
-    
+        return None, False
+
     subfields = parsed_marc.get('subfields', {})
-    
+
     h = subfields.get('h', '')
     i = subfields.get('i', '')
     j = subfields.get('j', '')
-    
+
     if j:
-        return j.strip()
+        return j.strip(), True
     elif h:
         if i:
-            return f"{h} {i}".strip()
-        return h.strip()
-    
-    return None
+            return f"{h} {i}".strip(), False
+        return h.strip(), False
+
+    return None, False
 
 
 # =============================================================================
@@ -159,28 +161,29 @@ _EQUIPMENT_WORDS = {
     'eraser', 'whiteboard', 'easel', 'calculator', 'laptop'
 }
 
-# Pre-compiled regex patterns for non-call-number detection
-_NOT_CN_PATTERNS = [re.compile(p) for p in [
-    # Access/availability notes
-    r'(?i)^access\s*(for|through|to|:)',
-    r'(?i)access[:.]',
-    r'(?i)available\s+(at|in|from|to|on)',
-    r'(?i)users?\s+(only|must|can|may)',
-    r'(?i)(college|university|library)\s+users',
-
-    # Staff instructions
-    r'(?i)see\s+(also|librarian|reference)',
+# Public note patterns — patron-facing instructions that belong in $z
+_PUBLIC_NOTE_PATTERNS = [re.compile(p) for p in [
+    # Patron instructions
     r'(?i)ask\s+(at|for|librarian|staff)',
-    r'(?i)check\s+(with|at)',
-    r'(?i)contact\s+',
-    r'(?i)request\s+(from|at|through)',
+    r'(?i)check\s+(with|at|below)',
     r'(?i)inquire',
     r'(?i)please\s+',
     r'(?i)assistance',
     r'(?i)circulation\s+desk',
     r'(?i)microforms?\s+desk',
 
-    # Shelving notes
+    # Access/availability notes (patron-facing)
+    r'(?i)^access\s*(for|through|to|:)',
+    r'(?i)access[:.]',
+    r'(?i)available\s+(at|in|from|to|on)',
+    r'(?i)not\s+available',
+    r'(?i)users?\s+(only|must|can|may)',
+    r'(?i)(college|university|library)\s+users',
+
+    # Shelving/location guidance for patrons
+    r'(?i)shelved\s+(with|in|at|by|under)',
+    r'(?i)filed\s+(under|with|in)',
+    r'(?i)located\s+(in|at)',
     r'(?i)\bon\s+reserve',
     r'(?i)reference\s+(only|desk|room)',
     r'(?i)non-circulating',
@@ -189,34 +192,8 @@ _NOT_CN_PATTERNS = [re.compile(p) for p in [
     r'(?i)does\s+not\s+circulate',
     r'(?i)\brestricted\b',
     r'(?i)permission\s+(required|needed)',
-    r'(?i)consult\s+',
-    r'(?i)stored\s+(off-?site|in)',
-    r'(?i)shelved\s+(with|in|at|by|under)',
-    r'(?i)filed\s+(under|with|in)',
-    r'(?i)bound\s+with',
-    r'(?i)located\s+(in|at)',
-    r'(?i)keep\s+at',
-    r'(?i)kept\s+(on|at|in)',
-    r'(?i)use\s+copy\s+in',
 
-    # Cataloging notes
-    r'(?i)cataloged\s+(under|with|as|separately)',
-    r'(?i)classed\s+(with|in)',
-    r'(?i)search\s+under',
-
-    # Status notes
-    r'(?i)superseded',
-    r'(?i)cancelled',
-    r'(?i)withdrawn',
-    r'(?i)\bmissing\b',
-    r'(?i)\blost\b',
-    r'(?i)damaged',
-    r'(?i)not\s+available',
-
-    # ILL/electronic
-    r'(?i)order\s+(from|through)',
-    r'(?i)interlibrary\s+loan',
-    r'(?i)\bill\s+only',
+    # Electronic access
     r'(?i)online\s+(access|only|version)',
     r'(?i)electronic\s+(access|version)',
     r'(?i)e-?resource',
@@ -226,11 +203,39 @@ _NOT_CN_PATTERNS = [re.compile(p) for p in [
     r'(?i)^https?://',
     r'(?i)^www\.',
 
+    # Browsing notes
+    r'(?i)current\s+issues',
+]]
+
+# Staff note patterns — cataloging/processing notes that belong in $x
+_STAFF_NOTE_PATTERNS = [re.compile(p) for p in [
+    # Cataloging notes
+    r'(?i)cataloged\s+(under|with|as|separately)',
+    r'(?i)classed\s+(with|in)',
+    r'(?i)search\s+under',
+    r'(?i)see\s+(also|librarian|reference)',
+    r'(?i)contact\s+',
+    r'(?i)request\s+(from|at|through)',
+    r'(?i)consult\s+',
+    r'(?i)bound\s+with',
+    r'(?i)use\s+copy\s+in',
+    r'(?i)keep\s+at',
+    r'(?i)kept\s+(on|at|in)',
+    r'(?i)stored\s+(off-?site|in)',
+    r'(?i)order\s+(from|through)',
+    r'(?i)interlibrary\s+loan',
+    r'(?i)\bill\s+only',
+
+    # Status notes
+    r'(?i)superseded',
+    r'(?i)cancelled',
+    r'(?i)withdrawn',
+    r'(?i)\bmissing\b',
+    r'(?i)\blost\b',
+    r'(?i)damaged',
+
     # Volume/issue notation without call number
     r'(?i)^\*\s*(vol|no\.?|v\.|issue|pt\.?|part)',
-
-    # Periodical title + browsing note (no classification, just "go look")
-    r'(?i)current\s+issues',
 
     # Encoding/placeholder patterns
     r'(?i)^e-[a-z]{2}---',
@@ -245,34 +250,42 @@ def is_not_a_call_number(cn):
     Detect notes, instructions, test data, and other non-call-number data
     that has been entered in call number fields.
 
-    These should be flagged for cleanup - the data belongs in other subfields
-    like $$z (public note) or $$x (nonpublic note).
+    Returns a category string describing what the data is:
+        'public_note' — patron-facing instructions (should be in $z)
+        'staff_note' — cataloging/processing notes (should be in $x)
+        'equipment' — not an information resource
+        'format_descriptor' — standalone format word (e.g., "DVD")
+        'test_data' — placeholder/test values
+        None — appears to be a real call number
     """
     cn_lower = cn.lower().strip()
 
     # Exact match test/placeholder values
     if cn_lower in _TEST_VALUES:
-        return True
+        return 'test_data'
 
     # Format descriptors WITHOUT numbers (just the format name alone)
-    # "CD ROM" alone = not a call number, but "CD ROM 003" = shelving scheme
     if cn_lower in _FORMAT_ONLY:
-        return True
+        return 'format_descriptor'
 
     # Equipment and supplies (not information resources at all)
     if set(cn_lower.split()) & _EQUIPMENT_WORDS and not re.search(r'\d', cn):
-        return True
+        return 'equipment'
 
     # Punctuation-only placeholders
     if _PUNCTUATION_ONLY_RE.match(cn):
-        return True
+        return 'test_data'
 
-    # Pattern-based detection (pre-compiled)
-    for pattern in _NOT_CN_PATTERNS:
+    # Pattern-based detection — check public notes first, then staff notes
+    for pattern in _PUBLIC_NOTE_PATTERNS:
         if pattern.search(cn):
-            return True
+            return 'public_note'
 
-    return False
+    for pattern in _STAFF_NOTE_PATTERNS:
+        if pattern.search(cn):
+            return 'staff_note'
+
+    return None
 
 
 def is_av_shelving_number(cn):
@@ -592,12 +605,18 @@ def _classify_call_number(cn_stripped):
 # MAIN CLASSIFICATION FUNCTION
 # =============================================================================
 
-def categorize_call_number(call_num):
+def categorize_call_number(call_num, from_j=False):
     """
     Analyze a call number and suggest the appropriate 852 first indicator.
-    
+
+    Args:
+        call_num: The call number string to classify.
+        from_j: True if the call number came from MARC 852 $j (shelving
+                control number subfield). If True, the call number is
+                treated as indicator 4 by definition.
+
     Returns: (indicator, classification_type, confidence, note)
-    
+
     Indicator values:
         0 = Library of Congress
         1 = Dewey Decimal
@@ -615,9 +634,23 @@ def categorize_call_number(call_num):
 
     cn = str(call_num).strip()
 
+    # === $j SUBFIELD OVERRIDE ===
+    # If the call number came from $j, it's shelving control by definition.
+    # The cataloger explicitly chose the shelving control subfield.
+    if from_j:
+        return '4', 'Shelving control number', 'High', 'In $j (shelving control subfield)'
+
     # === NON-CALL-NUMBERS ===
-    if is_not_a_call_number(cn):
-        return 'N/A', 'Not a call number', 'High', 'Appears to be a note/instruction/test'
+    not_cn = is_not_a_call_number(cn)
+    if not_cn:
+        note_map = {
+            'public_note': 'Public note — consider moving to $z',
+            'staff_note': 'Staff/cataloging note — consider moving to $x',
+            'equipment': 'Equipment/supply — not an information resource',
+            'format_descriptor': 'Format descriptor only — not a call number',
+            'test_data': 'Test/placeholder data',
+        }
+        return 'N/A', 'Not a call number', 'High', note_map.get(not_cn, 'Not a call number')
 
     # === AV SHELVING NUMBERS ===
     if is_av_shelving_number(cn):
@@ -665,10 +698,14 @@ def create_excel_output(df, output_path):
     """Create formatted Excel workbook with analysis results."""
     
     wb = Workbook()
-    
+
+    # Base font: 12pt Arial (applies to all cells by default)
+    normal = wb._named_styles['Normal']
+    normal.font = Font(name='Arial', size=12)
+
     # Styles
     header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
-    header_font = Font(bold=True, color='FFFFFF')
+    header_font = Font(name='Arial', size=12, bold=True, color='FFFFFF')
     thin_border = Border(
         left=Side(style='thin'), right=Side(style='thin'),
         top=Side(style='thin'), bottom=Side(style='thin')
@@ -712,7 +749,7 @@ def create_excel_output(df, output_path):
                 cell.fill = conf_colors[value]
             if col_idx == 9 and value == 'Not a call number':
                 cell.fill = not_cn_fill
-                cell.font = Font(bold=True)
+                cell.font = Font(name='Arial', size=12, bold=True)
     
     col_widths = {
         'A': 35, 'B': 30, 'C': 25, 'D': 60, 'E': 45,
@@ -739,11 +776,11 @@ def create_excel_output(df, output_path):
     
     row = 1
     ws_stats.cell(row=row, column=1, value="852 First Indicator Analysis - Statistics")
-    ws_stats.cell(row=row, column=1).font = Font(bold=True, size=14)
+    ws_stats.cell(row=row, column=1).font = Font(name='Arial', size=14, bold=True)
     row += 2
     
     ws_stats.cell(row=row, column=1, value="Overall Summary")
-    ws_stats.cell(row=row, column=1).font = Font(bold=True, size=12)
+    ws_stats.cell(row=row, column=1).font = Font(name='Arial', size=12, bold=True)
     row += 1
     ws_stats.cell(row=row, column=1, value="Total Records:")
     ws_stats.cell(row=row, column=2, value=len(df))
@@ -753,7 +790,7 @@ def create_excel_output(df, output_path):
     row += 2
     
     ws_stats.cell(row=row, column=1, value="By Classification Type")
-    ws_stats.cell(row=row, column=1).font = Font(bold=True, size=12)
+    ws_stats.cell(row=row, column=1).font = Font(name='Arial', size=12, bold=True)
     row += 1
     
     for col_idx, header in enumerate(['Suggested Indicator', 'Classification Type', 'Count', 'Percentage'], 1):
@@ -774,7 +811,7 @@ def create_excel_output(df, output_path):
     row += 1
     
     ws_stats.cell(row=row, column=1, value="By Confidence Level")
-    ws_stats.cell(row=row, column=1).font = Font(bold=True, size=12)
+    ws_stats.cell(row=row, column=1).font = Font(name='Arial', size=12, bold=True)
     row += 1
     
     for col_idx, header in enumerate(['Confidence', 'Count', 'Percentage'], 1):
@@ -797,7 +834,7 @@ def create_excel_output(df, output_path):
     row += 1
     
     ws_stats.cell(row=row, column=1, value="By Institution")
-    ws_stats.cell(row=row, column=1).font = Font(bold=True, size=12)
+    ws_stats.cell(row=row, column=1).font = Font(name='Arial', size=12, bold=True)
     row += 1
     
     for col_idx, header in enumerate(['Institution', 'Count'], 1):
@@ -823,11 +860,11 @@ def create_excel_output(df, output_path):
     crosstab = pd.crosstab(df['Institution Name'], df['Suggested Indicator'], margins=True, dropna=False)
     
     ws_inst.cell(row=1, column=1, value="Classification by Institution")
-    ws_inst.cell(row=1, column=1).font = Font(bold=True, size=14)
+    ws_inst.cell(row=1, column=1).font = Font(name='Arial', size=14, bold=True)
     
     row = 3
     ws_inst.cell(row=row, column=1, value="Count by Institution and Suggested Indicator")
-    ws_inst.cell(row=row, column=1).font = Font(bold=True, size=12)
+    ws_inst.cell(row=row, column=1).font = Font(name='Arial', size=12, bold=True)
     row += 1
     
     headers = ['Institution'] + [str(c) for c in crosstab.columns]
@@ -846,15 +883,15 @@ def create_excel_output(df, output_path):
     
     row += 2
     ws_inst.cell(row=row, column=1, value="Sample 'Other Scheme' and 'Unknown' Entries by Institution")
-    ws_inst.cell(row=row, column=1).font = Font(bold=True, size=12)
+    ws_inst.cell(row=row, column=1).font = Font(name='Arial', size=12, bold=True)
     row += 1
     ws_inst.cell(row=row, column=1, value="(These may be local schemes that vary by campus)")
-    ws_inst.cell(row=row, column=1).font = Font(italic=True)
+    ws_inst.cell(row=row, column=1).font = Font(name='Arial', size=12, italic=True)
     row += 2
     
     other_unknown = df[df['Suggested Indicator'].isin(['8', 'blank', 'N/A'])]
     for inst in other_unknown['Institution Name'].value_counts().head(10).index:
-        ws_inst.cell(row=row, column=1, value=inst).font = Font(bold=True)
+        ws_inst.cell(row=row, column=1, value=inst).font = Font(name='Arial', size=12, bold=True)
         row += 1
         samples = other_unknown[other_unknown['Institution Name'] == inst]['Extracted Call Number'].dropna().unique()[:8]
         for sample in samples:
@@ -892,21 +929,25 @@ def main(input_path, output_path):
     # Parse 852 MARC and extract call numbers
     print("Parsing 852 MARC fields...")
     df['Parsed MARC'] = df['852 MARC'].apply(parse_852_marc)
-    df['Extracted Call Number'] = df['Parsed MARC'].apply(get_call_number_from_marc)
+    marc_results = df['Parsed MARC'].apply(get_call_number_from_marc)
+    df['Extracted Call Number'] = marc_results.apply(lambda x: x[0])
+    df['From $j'] = marc_results.apply(lambda x: x[1])
     df['Call Number for Analysis'] = df.apply(
         lambda row: row['Extracted Call Number'] if row['Extracted Call Number'] else row['Permanent Call Number'],
         axis=1
     )
-    
+
     # Classify each call number
     print("Classifying call numbers...")
     indicators = []
     class_types = []
     confidences = []
     notes = []
-    
-    for cn in df['Call Number for Analysis']:
-        result = categorize_call_number(cn)
+
+    for _, row in df.iterrows():
+        cn = row['Call Number for Analysis']
+        from_j = row['From $j']
+        result = categorize_call_number(cn, from_j=from_j)
         indicators.append(result[0])
         class_types.append(result[1])
         confidences.append(result[2])
