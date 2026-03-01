@@ -114,37 +114,96 @@ def get_call_number_from_marc(parsed_marc):
 # VALID LC CLASSIFICATION LETTERS
 # =============================================================================
 
-# LC uses A-Z EXCEPT I, O, W, X, Y
+# Complete list of LC classification letters, extracted from the Library of
+# Congress Classification schedule PDFs (A through Z), downloaded Feb 2026.
+# LC uses A-Z EXCEPT I, O, W, X, Y:
 # - I and O are not used (avoid confusion with 1 and 0)
 # - W is NLM (medicine)
 # - X is not used
 # - Y is SuDoc (Congressional)
 
-LC_VALID_CLASSES = set([
-    # Single letters
-    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M', 
-    'N', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'Z',
-    # Two-letter subclasses
-    'AC', 'AE', 'AG', 'AI', 'AM', 'AN', 'AP', 'AS', 'AY', 'AZ',
-    'BC', 'BD', 'BF', 'BH', 'BJ', 'BL', 'BM', 'BP', 'BQ', 'BR', 'BS', 'BT', 'BV', 'BX',
-    'CB', 'CC', 'CD', 'CE', 'CJ', 'CN', 'CR', 'CS', 'CT',
-    'DA', 'DB', 'DC', 'DD', 'DE', 'DF', 'DG', 'DH', 'DJ', 'DK', 'DL', 'DP', 'DQ', 'DR', 'DS', 'DT', 'DU', 'DX',
-    'GA', 'GB', 'GC', 'GE', 'GF', 'GN', 'GR', 'GT', 'GV',
-    'HA', 'HB', 'HC', 'HD', 'HE', 'HF', 'HG', 'HJ', 'HM', 'HN', 'HQ', 'HS', 'HT', 'HV', 'HX',
-    'JA', 'JC', 'JF', 'JJ', 'JK', 'JL', 'JN', 'JQ', 'JS', 'JV', 'JX', 'JZ',
-    'KB', 'KD', 'KE', 'KF', 'KG', 'KH', 'KJ', 'KK', 'KL', 'KN', 'KP', 'KQ', 'KR', 'KS', 'KT', 'KU', 'KV', 'KZ',
-    'LA', 'LB', 'LC', 'LD', 'LE', 'LF', 'LG', 'LH', 'LJ', 'LT',
-    'ML', 'MT',
-    'NA', 'NB', 'NC', 'ND', 'NE', 'NK', 'NX',
-    'PA', 'PB', 'PC', 'PD', 'PE', 'PF', 'PG', 'PH', 'PJ', 'PK', 'PL', 'PM', 'PN', 'PQ', 'PR', 'PS', 'PT', 'PZ',
-    'QA', 'QB', 'QC', 'QD', 'QE', 'QH', 'QK', 'QL', 'QM', 'QP', 'QR',
-    'RA', 'RB', 'RC', 'RD', 'RE', 'RF', 'RG', 'RJ', 'RK', 'RL', 'RM', 'RS', 'RT', 'RV', 'RX', 'RZ',
-    'SB', 'SD', 'SF', 'SH', 'SK',
-    'TA', 'TC', 'TD', 'TE', 'TF', 'TG', 'TH', 'TJ', 'TK', 'TL', 'TN', 'TP', 'TR', 'TS', 'TT', 'TX',
-    'UA', 'UB', 'UC', 'UD', 'UE', 'UF', 'UG', 'UH',
-    'VA', 'VB', 'VC', 'VD', 'VE', 'VF', 'VG', 'VK', 'VM',
-    'ZA'
-])
+LC_VALID_CLASSES = {
+    # A - General Works
+    'A', 'AC', 'AE', 'AG', 'AI', 'AM', 'AN', 'AP', 'AS', 'AY', 'AZ',
+    # B - Philosophy, Psychology, Religion
+    'B', 'BC', 'BD', 'BF', 'BH', 'BJ', 'BL', 'BM', 'BP', 'BQ', 'BR', 'BS', 'BT', 'BV', 'BX',
+    # C - Auxiliary Sciences of History
+    'C', 'CB', 'CC', 'CD', 'CE', 'CJ', 'CN', 'CR', 'CS', 'CT',
+    # D - World History
+    'D', 'DA', 'DAW', 'DB', 'DC', 'DD', 'DE', 'DF', 'DG', 'DH', 'DJ', 'DJK',
+    'DK', 'DL', 'DP', 'DQ', 'DR', 'DS', 'DT', 'DU', 'DX',
+    # E, F - History of the Americas (no subclasses)
+    'E', 'F',
+    # G - Geography, Anthropology, Recreation
+    'G', 'GA', 'GB', 'GC', 'GE', 'GF', 'GN', 'GR', 'GT', 'GV',
+    # H - Social Sciences
+    'H', 'HA', 'HB', 'HC', 'HD', 'HE', 'HF', 'HG', 'HJ', 'HM', 'HN', 'HQ', 'HS', 'HT', 'HV', 'HX',
+    # J - Political Science
+    'J', 'JA', 'JC', 'JF', 'JJ', 'JK', 'JL', 'JN', 'JQ', 'JS', 'JV', 'JX', 'JZ',
+    # K - Law (two-letter subclasses)
+    'K', 'KB', 'KD', 'KE', 'KF', 'KG', 'KH', 'KJ', 'KK', 'KL', 'KM', 'KN', 'KP', 'KQ', 'KR', 'KS', 'KT', 'KU', 'KV', 'KW', 'KZ',
+    # K - Law (three-letter subclasses)
+    'KBM', 'KBP', 'KBR', 'KBU',
+    'KDC', 'KDE', 'KDG', 'KDK', 'KDZ',
+    'KEA', 'KEB', 'KEM', 'KEN', 'KEO', 'KEP', 'KEQ', 'KES', 'KEY', 'KEZ',
+    'KFA', 'KFC', 'KFD', 'KFF', 'KFG', 'KFH', 'KFI', 'KFK', 'KFL', 'KFM',
+    'KFN', 'KFO', 'KFP', 'KFR', 'KFS', 'KFT', 'KFU', 'KFV', 'KFW', 'KFX', 'KFZ',
+    'KGA', 'KGB', 'KGC', 'KGD', 'KGE', 'KGF', 'KGG', 'KGH', 'KGJ', 'KGK',
+    'KGL', 'KGM', 'KGN', 'KGP', 'KGQ', 'KGR', 'KGS', 'KGT', 'KGU', 'KGV',
+    'KGW', 'KGX', 'KGY', 'KGZ',
+    'KHA', 'KHC', 'KHD', 'KHF', 'KHH', 'KHK', 'KHL', 'KHM', 'KHN', 'KHP',
+    'KHQ', 'KHS', 'KHU', 'KHW',
+    'KJA', 'KJC', 'KJE', 'KJG', 'KJH', 'KJJ', 'KJK', 'KJM', 'KJN',
+    'KJP', 'KJR', 'KJS', 'KJT', 'KJV', 'KJW',
+    'KKA', 'KKB', 'KKC', 'KKE', 'KKF', 'KKG', 'KKH', 'KKI', 'KKJ',
+    'KKK', 'KKL', 'KKM', 'KKN', 'KKP', 'KKQ', 'KKR', 'KKS', 'KKT', 'KKV',
+    'KKW', 'KKX', 'KKY', 'KKZ',
+    'KLA', 'KLB', 'KLD', 'KLE', 'KLF', 'KLH', 'KLM', 'KLN', 'KLP',
+    'KLQ', 'KLR', 'KLS', 'KLT', 'KLV', 'KLW',
+    'KMC', 'KME', 'KMF', 'KMG', 'KMH', 'KMJ', 'KMK', 'KML', 'KMM',
+    'KMN', 'KMP', 'KMQ', 'KMS', 'KMT', 'KMU', 'KMV', 'KMX', 'KMY',
+    'KNC', 'KNE', 'KNF', 'KNG', 'KNH', 'KNK', 'KNL', 'KNM', 'KNN',
+    'KNP', 'KNQ', 'KNR', 'KNS', 'KNT', 'KNU', 'KNV', 'KNW', 'KNX', 'KNY',
+    'KPA', 'KPC', 'KPE', 'KPF', 'KPG', 'KPH', 'KPJ', 'KPK', 'KPL',
+    'KPM', 'KPP', 'KPS', 'KPT', 'KPV', 'KPW',
+    'KQC', 'KQE', 'KQG', 'KQH', 'KQJ', 'KQK', 'KQM', 'KQP', 'KQT',
+    'KQV', 'KQW', 'KQX',
+    'KRB', 'KRC', 'KRE', 'KRG', 'KRK', 'KRL', 'KRM', 'KRN', 'KRP',
+    'KRR', 'KRS', 'KRU', 'KRV', 'KRW', 'KRX', 'KRY',
+    'KSA', 'KSC', 'KSE', 'KSG', 'KSH', 'KSK', 'KSL', 'KSN', 'KSP',
+    'KSR', 'KSS', 'KST', 'KSU', 'KSV', 'KSW', 'KSX', 'KSY', 'KSZ',
+    'KTA', 'KTC', 'KTD', 'KTE', 'KTF', 'KTG', 'KTH', 'KTJ', 'KTK',
+    'KTL', 'KTN', 'KTQ', 'KTR', 'KTT', 'KTU', 'KTV', 'KTW', 'KTX', 'KTY', 'KTZ',
+    'KUA', 'KUN', 'KUQ',
+    'KVB', 'KVC', 'KVE', 'KVH', 'KVL', 'KVM', 'KVN', 'KVP', 'KVQ',
+    'KVR', 'KVS', 'KVU', 'KVW',
+    'KWA', 'KWC', 'KWE', 'KWG', 'KWH', 'KWL', 'KWP', 'KWQ', 'KWR',
+    'KWT', 'KWW', 'KWX',
+    'KZA', 'KZD',
+    # L - Education
+    'L', 'LA', 'LB', 'LC', 'LD', 'LE', 'LF', 'LG', 'LH', 'LJ', 'LT',
+    # M - Music
+    'M', 'ML', 'MT',
+    # N - Fine Arts
+    'N', 'NA', 'NB', 'NC', 'ND', 'NE', 'NK', 'NX',
+    # P - Language and Literature
+    'P', 'PA', 'PB', 'PC', 'PD', 'PE', 'PF', 'PG', 'PH', 'PJ', 'PK', 'PL', 'PM',
+    'PN', 'PQ', 'PR', 'PS', 'PT', 'PZ',
+    # Q - Science
+    'Q', 'QA', 'QB', 'QC', 'QD', 'QE', 'QH', 'QK', 'QL', 'QM', 'QP', 'QR',
+    # R - Medicine
+    'R', 'RA', 'RB', 'RC', 'RD', 'RE', 'RF', 'RG', 'RJ', 'RK', 'RL', 'RM', 'RS', 'RT', 'RV', 'RX', 'RZ',
+    # S - Agriculture
+    'S', 'SB', 'SD', 'SF', 'SH', 'SK',
+    # T - Technology
+    'T', 'TA', 'TC', 'TD', 'TE', 'TF', 'TG', 'TH', 'TJ', 'TK', 'TL', 'TN', 'TP', 'TR', 'TS', 'TT', 'TX',
+    # U - Military Science
+    'U', 'UA', 'UB', 'UC', 'UD', 'UE', 'UF', 'UG', 'UH',
+    # V - Naval Science
+    'V', 'VA', 'VB', 'VC', 'VD', 'VE', 'VF', 'VG', 'VK', 'VM',
+    # Z - Bibliography, Library Science
+    'Z', 'ZA',
+}
 
 
 # =============================================================================
@@ -416,22 +475,8 @@ def extract_class_letters(cn):
 
 
 def is_valid_lc_class(letters):
-    """
-    Check if letters are a valid LC classification.
-
-    For three-letter classes (like KFN, KJC, KTQ), accepts them if
-    the first two letters are a valid two-letter class. This handles
-    the many three-letter subclasses in the K (Law) schedule and
-    similar cases without needing to enumerate them all.
-    """
-    if not letters:
-        return False
-    if letters in LC_VALID_CLASSES:
-        return True
-    # Three-letter classes: valid if first two letters are a valid class
-    if len(letters) == 3 and letters[:2] in LC_VALID_CLASSES:
-        return True
-    return False
+    """Check if letters are a valid LC classification."""
+    return bool(letters) and letters in LC_VALID_CLASSES
 
 
 def is_sudoc(cn):
