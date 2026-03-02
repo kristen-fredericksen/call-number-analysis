@@ -101,7 +101,7 @@ LC uses letters A-Z **except I, O, W, X, and Y**:
 
 **Y is always SuDoc** (Congressional documents), never LC.
 
-Complete list of LC two- and three-letter subclasses (from LC Classification schedule PDFs, Feb 2026):
+Complete list of LC two- and three-letter subclasses (from [LC Classification schedule PDFs](https://www.loc.gov/aba/publications/FreeLCC/freelcc.html), Feb 2026):
 
 | Class | Subclasses |
 |-------|-----------|
