@@ -26,12 +26,75 @@ Version: 1.0
 """
 
 import pandas as pd
+import json
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+
+# =============================================================================
+# CUNY INSTITUTION CODES (for Primo source record links)
+# =============================================================================
+
+# Maps Alma IZ institution codes to institution names.
+# Analytics sometimes returns the IZ code instead of the institution name.
+ALMA_IZ_CODES = {
+    '6121': 'CUNY Network Zone',
+    '6122': 'Baruch College',
+    '6123': 'Bronx Community College',
+    '6124': 'Brooklyn College',
+    '6125': 'College of Staten Island',
+    '6126': 'Craig Newmark Graduate School of Journalism at CUNY',
+    '6127': 'LaGuardia Community College',
+    '6128': 'John Jay College of Criminal Justice',
+    '6129': 'Kingsborough Community College',
+    '6130': 'CUNY School of Law',
+    '6131': 'Guttman Community College',
+    '6132': 'Hostos Community College',
+    '6133': 'Hunter College',
+    '6134': 'Lehman College',
+    '6135': 'Medgar Evers College',
+    '6136': 'New York City College of Technology',
+    '6137': 'Queens College',
+    '6138': 'The City College of New York',
+    '6139': 'York College',
+    '6140': 'CUNY Graduate Center',
+    '6141': 'Borough of Manhattan Community College',
+    '6142': 'Queensborough Community College',
+    '6143': 'CUNY Central Office',
+}
+
+# Maps institution names (as they appear in Analytics) to CUNY Primo codes.
+# Used to build links like:
+#   https://cuny-kb.primo.exlibrisgroup.com/discovery/sourceRecord?
+#       vid=01CUNY_KB:CUNY_KB&docId=alma990001234560106129
+CUNY_PRIMO_CODES = {
+    'Baruch College': 'BB',
+    'Borough of Manhattan Community College': 'BM',
+    'Bronx Community College': 'BX',
+    'Brooklyn College': 'BC',
+    'College of Staten Island': 'SI',
+    'Craig Newmark Graduate School of Journalism at CUNY': 'GJ',
+    'CUNY Central Office': 'AL',
+    'CUNY Graduate Center': 'GC',
+    'CUNY School of Law': 'CL',
+    'Guttman Community College': 'NC',
+    'Hostos Community College': 'HO',
+    'Hunter College': 'HC',
+    'John Jay College of Criminal Justice': 'JJ',
+    'Kingsborough Community College': 'KB',
+    'LaGuardia Community College': 'LG',
+    'Lehman College': 'LE',
+    'Medgar Evers College': 'ME',
+    'New York City College of Technology': 'NY',
+    'Queens College': 'QC',
+    'Queensborough Community College': 'QB',
+    'The City College of New York': 'CC',
+    'York College': 'YC',
+}
 
 
 # =============================================================================
@@ -80,9 +143,7 @@ def _looks_like_shelving_control(value):
     Examples that ARE shelving control: DVD 521, CD 1811, Video disc 110
     Examples that are NOT (miscoded cutters): .A85, M53, R74
     """
-    # AV format prefix + number pattern
-    av_pattern = r'^(DVD|CD|VHS|Video|Fiche|Disc|Tape|Cassette)\b'
-    if re.match(av_pattern, value.strip(), re.IGNORECASE):
+    if _RE_SHELVING_CTRL_AV.match(value.strip()):
         return True
     return False
 
@@ -132,6 +193,11 @@ def get_call_number_from_marc(parsed_marc):
         if i:
             return f"{h} {i}".strip(), False, False, False
         return h.strip(), False, False, False
+    elif i:
+        # $i (item part/cutter) without $h (classification) — the class
+        # number is missing. Return $i so it's visible in the output, but
+        # it will be flagged during classification.
+        return i.strip(), False, False, False
 
     return None, False, False, False
 
@@ -353,6 +419,67 @@ _STAFF_NOTE_PATTERNS = [re.compile(p) for p in [
 
 _PUNCTUATION_ONLY_RE = re.compile(r'^[\?\.\-\_\*\#]+$')
 
+# Pre-compiled classification patterns (compiled once at import, not per call)
+_RE_DIGIT = re.compile(r'\d')
+
+# AV shelving detection
+_RE_SHELVING_CTRL_AV = re.compile(r'^(DVD|CD|VHS|Video|Fiche|Disc|Tape|Cassette)\b', re.IGNORECASE)
+_RE_AV_SIMPLE = re.compile(r'^(CD|DVD|VHS|LP|MC|DAT)[\s\-]+[A-Z]*\d+(\s|$)', re.IGNORECASE)
+_RE_AV_LC_CHECK = re.compile(r'^(CD|DVD)\s*\d+[\s.]+\.?[A-Z]\d*', re.IGNORECASE)
+_RE_AV_ROM = re.compile(r'^(CD|DVD)[\s\-]*(ROM)\s+\d+', re.IGNORECASE)
+_RE_AV_PREFIX_FORMAT = re.compile(r'^[A-Z]+\s+(CD|DVD)[\s\-]*(ROM)?\s+\d+', re.IGNORECASE)
+_RE_AV_VIDEO = re.compile(r'Video[\s\-]*(disc|recording|tape|CD|DVD|VHS)\s*[A-Z]*\d+', re.IGNORECASE)
+_RE_AV_CASSETTE = re.compile(r'^VIDEO\s+CASSETTE\s+\d+', re.IGNORECASE)
+_RE_AV_FICHE = re.compile(r'^(Fiche|Micro(film|card|fiche))\s*\d+', re.IGNORECASE)
+_RE_AV_MICRO_FORMAT = re.compile(r'^Micro(film|card|fiche)\s+[A-Z]+\s+\d+', re.IGNORECASE)
+_RE_AV_RECORDING = re.compile(r'Recording\s+[A-Z]*\d+', re.IGNORECASE)
+_RE_AV_MUSIC = re.compile(r'^Music\s+(CD|DVD)\s+', re.IGNORECASE)
+
+# Local collection schemes
+_RE_LOCAL_HYPHEN = re.compile(r'^[A-Z]{2,5}\s+\d{2,4}-\d+', re.IGNORECASE)
+_RE_LOCAL_PREFIX_NUM = re.compile(r'^[A-Z]{2,5}\s+\d{2,4}(\s|$)', re.IGNORECASE)
+
+# Class letter extraction
+_RE_CLASS_LETTERS = re.compile(r'^([A-Z]{1,3})\s*\d', re.IGNORECASE)
+
+# SuDoc
+_RE_SUDOC = re.compile(r'^[A-Z]{1,4}\s*\d+\.[A-Z0-9\s/\-\.]+:', re.IGNORECASE)
+_RE_SUDOC_Y = re.compile(r'^Y\s*\d', re.IGNORECASE)
+
+# NLM
+_RE_NLM_CLASS = re.compile(r'^(Q[S-Z]|W[A-Z]?)$')
+_RE_NLM_NUM = re.compile(r'^(Q[S-Z]|W[A-Z]?)\s*\d')
+
+# LAC (Library and Archives Canada)
+_RE_LAC_FC = re.compile(r'^FC\s*\d', re.IGNORECASE)
+_RE_LAC_PS = re.compile(r'^PS\s*(\d+)', re.IGNORECASE)
+
+# Dewey
+_RE_DEWEY_DECIMAL = re.compile(r'^\d{3}\.\d+')
+_RE_DEWEY_CUTTER = re.compile(r'^(\d{3})\s+([A-Z]\d+[A-Z]?)(\s|$)', re.IGNORECASE)
+_RE_DEWEY_AUTHOR = re.compile(r'^(\d{3})\s+[A-Z][a-z]{1,4}\b')
+
+# Local reserve labels
+_RE_RESERVE_EDITION = re.compile(r'^[A-Z]{1,3}\s*\d{4}\s+\d+(st|nd|rd|th)\s+Ed', re.IGNORECASE)
+_RE_RESERVE_YEAR = re.compile(r'^[A-Z]{1,3}\s+\d{1,2}\s+\d{4}\s*$', re.IGNORECASE)
+
+# LC classification
+_RE_LC_MLCS = re.compile(r'MLCS\s*\d{4}/', re.IGNORECASE)
+_RE_LC_CUTTER_ATTACHED = re.compile(r'^[A-Z]{1,3}\s*\d{1,4}\.[A-Z]\d*', re.IGNORECASE)
+_RE_LC_CUTTER_SPACE = re.compile(r'^[A-Z]{1,3}\s*\d{1,4}(\s*\.\d+)?\s+\.?[A-Z]\d*', re.IGNORECASE)
+_RE_LC_DATE_CUTTER = re.compile(r'^[A-Z]{1,3}\s*\d{1,4}\s+\d{4}\s+\.?[A-Z]\d*', re.IGNORECASE)
+_RE_LC_DECIMAL = re.compile(r'^[A-Z]{1,3}\s*\d{1,4}\s*\.\d+', re.IGNORECASE)
+_RE_LC_CUTTER_NOSEP = re.compile(r'^[A-Z]{1,3}\d{1,4}[A-Z]\d*', re.IGNORECASE)
+_RE_LC_SIMPLE = re.compile(r'^[A-Z]{1,3}\s*\d{1,4}(\s|$)', re.IGNORECASE)
+
+# Catch-all AV and local patterns (in _classify_call_number)
+_RE_AV_TAIL = re.compile(r'^(DVD|VHS|CD|VID|TAPE|VIDEO)\s*\d', re.IGNORECASE)
+_RE_AV_CIRC = re.compile(r'^(Circ|Arch)\s*(CD|DVD|Video|VHS)', re.IGNORECASE)
+_RE_LOCAL_2DIGIT = re.compile(r'^\d{2}\s+[A-Z]\d')
+_RE_LOCAL_DATE = re.compile(r'^\d{4}-\d{1,2}-\d{1,2}')
+_RE_LOCAL_ACCESSION = re.compile(r'^\d{4,}-\d+')
+_RE_LOCAL_NOTATION = re.compile(r'^[*#]')
+
 
 def is_not_a_call_number(cn):
     """
@@ -381,7 +508,7 @@ def is_not_a_call_number(cn):
     # like "Logitech Headset" (no number = not a call number).
     # Items WITH identifiers ("Apple Mouse #5", "TOOLKIT#1") are shelving
     # control numbers and should fall through to normal classification.
-    if set(cn_lower.split()) & _EQUIPMENT_WORDS and not re.search(r'\d', cn):
+    if set(cn_lower.split()) & _EQUIPMENT_WORDS and not _RE_DIGIT.search(cn):
         return 'equipment'
 
     # Punctuation-only placeholders
@@ -420,50 +547,50 @@ def is_av_shelving_number(cn):
     # Allows space or hyphen between format and number.
     # BUT NOT if followed by a cutter pattern (dot + letter), which means LC
     # e.g., "CD 3960 .P9" is LC class CD (Diplomatics), not an AV disc
-    if re.match(r'^(CD|DVD|VHS|LP|MC|DAT)[\s\-]+[A-Z]*\d+(\s|$)', cn, re.IGNORECASE):
+    if _RE_AV_SIMPLE.match(cn):
         # Check if it looks like LC (has a cutter after the number)
-        if not re.match(r'^(CD|DVD)\s*\d+[\s.]+\.?[A-Z]\d*', cn, re.IGNORECASE):
+        if not _RE_AV_LC_CHECK.match(cn):
             return True
 
     # Pattern 2: Format + ROM + number (CD ROM 003, DVD ROM 001)
-    if re.match(r'^(CD|DVD)[\s\-]*(ROM)\s+\d+', cn, re.IGNORECASE):
+    if _RE_AV_ROM.match(cn):
         return True
 
     # Pattern 3: Collection prefix + format (+ optional ROM) + number
     # Examples: "BRL CD ROM 071", "MUS DVD 015"
-    if re.match(r'^[A-Z]+\s+(CD|DVD)[\s\-]*(ROM)?\s+\d+', cn, re.IGNORECASE):
+    if _RE_AV_PREFIX_FORMAT.match(cn):
         return True
 
     # Pattern 4: Video/Videotape + format/disc + number (with optional prefix)
     # Examples: "DSI Video CD 18", "CohenLib Video disc 110",
     #           "MusLib Video- disc MD56", "MusLib Video- recording MV74",
     #           "CohenLib Video- tape 440", "CohenLib Videotape 264"
-    if re.search(r'Video[\s\-]*(disc|recording|tape|CD|DVD|VHS)\s*[A-Z]*\d+', cn, re.IGNORECASE):
+    if _RE_AV_VIDEO.search(cn):
         return True
 
     # Pattern 5: VIDEO CASSETTE + number
     # Examples: "VIDEO CASSETTE 2199", "VIDEO CASSETTE 2198"
-    if re.match(r'^VIDEO\s+CASSETTE\s+\d+', cn, re.IGNORECASE):
+    if _RE_AV_CASSETTE.match(cn):
         return True
 
     # Pattern 6: Fiche/microfiche + number
     # Examples: "Fiche 414", "Microcard 5067"
-    if re.match(r'^(Fiche|Micro(film|card|fiche))\s*\d+', cn, re.IGNORECASE):
+    if _RE_AV_FICHE.match(cn):
         return True
 
     # Pattern 7: Microfilm + format code + number
     # Examples: "Microfilm MF 400"
-    if re.match(r'^Micro(film|card|fiche)\s+[A-Z]+\s+\d+', cn, re.IGNORECASE):
+    if _RE_AV_MICRO_FORMAT.match(cn):
         return True
 
     # Pattern 8: Recording + accession code (with optional prefix)
     # Examples: "MusLib Recording CD1116"
-    if re.search(r'Recording\s+[A-Z]*\d+', cn, re.IGNORECASE):
+    if _RE_AV_RECORDING.search(cn):
         return True
 
     # Pattern 9: Music CD/format + number (without standard prefix)
     # Examples: "Music CD no.8", "CD Rhymes"
-    if re.match(r'^Music\s+(CD|DVD)\s+', cn, re.IGNORECASE):
+    if _RE_AV_MUSIC.match(cn):
         return True
 
     return False
@@ -484,11 +611,11 @@ def is_local_collection_scheme(cn):
     Returns: (is_match, confidence, note) or (False, None, None)
     """
     # Pattern: 2-5 letter prefix + hyphenated number (like BRL 200-11)
-    if re.match(r'^[A-Z]{2,5}\s+\d{2,4}-\d+', cn, re.IGNORECASE):
+    if _RE_LOCAL_HYPHEN.match(cn):
         return True, 'Medium', 'Local collection scheme (prefix + hyphenated number)'
-    
+
     # Pattern: 2-5 letter prefix + simple number (like BRLV 207)
-    if re.match(r'^[A-Z]{2,5}\s+\d{2,4}(\s|$)', cn, re.IGNORECASE):
+    if _RE_LOCAL_PREFIX_NUM.match(cn):
         return True, 'Low', 'Possible local collection scheme (prefix + number)'
     
     return False, None, None
@@ -496,7 +623,7 @@ def is_local_collection_scheme(cn):
 
 def extract_class_letters(cn):
     """Extract leading class letters from a call number."""
-    match = re.match(r'^([A-Z]{1,3})\s*\d', cn, re.IGNORECASE)
+    match = _RE_CLASS_LETTERS.match(cn)
     return match.group(1).upper() if match else None
 
 
@@ -526,7 +653,7 @@ def is_sudoc(cn):
 
     # Agency letters + number.anything + colon
     # Allow slashes, hyphens, digits, letters, and spaces between dot and colon
-    if re.match(r'^[A-Z]{1,4}\s*\d+\.[A-Z0-9\s/\-\.]+:', cn, re.IGNORECASE):
+    if _RE_SUDOC.match(cn):
         return True
 
     return False
@@ -546,11 +673,11 @@ def is_dewey(cn):
     Returns: (is_match, confidence, note) or (False, None, None)
     """
     # 3 digits with decimal
-    if re.match(r'^\d{3}\.\d+', cn):
+    if _RE_DEWEY_DECIMAL.match(cn):
         return True, 'High', 'Dewey with decimal'
-    
+
     # 3 digits + Cutter (no decimal)
-    match = re.match(r'^(\d{3})\s+([A-Z]\d+[A-Z]?)(\s|$)', cn, re.IGNORECASE)
+    match = _RE_DEWEY_CUTTER.match(cn)
     if match:
         dewey_num = match.group(1)
         # Make sure it's not a repeated number (like "102 102")
@@ -559,7 +686,7 @@ def is_dewey(cn):
 
     # 3 digits + author abbreviation (no decimal, no standard cutter)
     # e.g., "861 Bro 3-5" — Dewey class + truncated author name
-    match = re.match(r'^(\d{3})\s+[A-Z][a-z]{1,4}\b', cn)
+    match = _RE_DEWEY_AUTHOR.match(cn)
     if match:
         dewey_num = match.group(1)
         if not cn.startswith(f"{dewey_num} {dewey_num}"):
@@ -629,11 +756,11 @@ def is_lac(cn):
     Returns: (is_match, confidence, note) or (False, None, None)
     """
     # FC + number = LAC Canadian history
-    if re.match(r'^FC\s*\d', cn, re.IGNORECASE):
+    if _RE_LAC_FC.match(cn):
         return True, 'High', 'LAC class FC (Canadian history)'
 
     # PS + number >= 8000 = LAC Canadian literature
-    ps_match = re.match(r'^PS\s*(\d+)', cn, re.IGNORECASE)
+    ps_match = _RE_LAC_PS.match(cn)
     if ps_match:
         ps_num = int(ps_match.group(1))
         if ps_num >= 8000:
@@ -658,13 +785,13 @@ def _classify_call_number(cn_stripped):
         return '3', 'Superintendent of Documents', 'High', 'SuDoc pattern (colon separator)'
 
     # Y class is always SuDoc (Congressional), never LC
-    if re.match(r'^Y\s*\d', cn_stripped, re.IGNORECASE):
+    if _RE_SUDOC_Y.match(cn_stripped):
         return '3', 'Superintendent of Documents', 'High', 'SuDoc Y class (Congressional)'
 
     # === NLM ===
     class_letters = extract_class_letters(cn_stripped)
-    if class_letters and re.match(r'^(Q[S-Z]|W[A-Z]?)$', class_letters):
-        if re.match(r'^(Q[S-Z]|W[A-Z]?)\s*\d', cn_stripped):
+    if class_letters and _RE_NLM_CLASS.match(class_letters):
+        if _RE_NLM_NUM.match(cn_stripped):
             return '2', 'National Library of Medicine', 'High', 'NLM class (QS-QZ or W)'
 
     # === LAC (Library and Archives Canada) ===
@@ -682,39 +809,37 @@ def _classify_call_number(cn_stripped):
     # "CJ 2017 3rd Ed"). These are local shelving labels for course
     # reserves, not classification numbers. Check before LC to prevent
     # false matches on valid LC class letters.
-    if re.match(r'^[A-Z]{1,3}\s*\d{4}\s+\d+(st|nd|rd|th)\s+Ed',
-                 cn_stripped, re.IGNORECASE):
+    if _RE_RESERVE_EDITION.match(cn_stripped):
         return '8', 'Other scheme', 'Medium', 'Local shelving label (title abbreviation + edition)'
     # Letters + small number + year, no cutter (e.g., "RM 30 2016").
     # Real LC call numbers with a date almost always have a cutter
     # between the class number and the date.
-    if re.match(r'^[A-Z]{1,3}\s+\d{1,2}\s+\d{4}\s*$',
-                 cn_stripped, re.IGNORECASE):
+    if _RE_RESERVE_YEAR.match(cn_stripped):
         return '8', 'Other scheme', 'Medium', 'Local shelving label (title abbreviation + year)'
 
     # === LC CLASSIFICATION ===
     if class_letters and is_valid_lc_class(class_letters):
         # CIP/preliminary LC (MLCS pattern)
-        if re.search(r'MLCS\s*\d{4}/', cn_stripped, re.IGNORECASE):
+        if _RE_LC_MLCS.search(cn_stripped):
             return '0', 'Library of Congress', 'Low', 'LC (CIP/preliminary — MLCS number)'
         # LC with attached cutter (no space between class number and cutter)
-        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}\.[A-Z]\d*', cn_stripped, re.IGNORECASE):
+        if _RE_LC_CUTTER_ATTACHED.match(cn_stripped):
             return '0', 'Library of Congress', 'High', 'LC with cutter'
         # LC with cutter (space between class number and cutter)
-        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}(\s*\.\d+)?\s+\.?[A-Z]\d*', cn_stripped, re.IGNORECASE):
+        if _RE_LC_CUTTER_SPACE.match(cn_stripped):
             return '0', 'Library of Congress', 'High', 'LC with cutter'
         # LC with number + date + cutter
-        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}\s+\d{4}\s+\.?[A-Z]\d*', cn_stripped, re.IGNORECASE):
+        if _RE_LC_DATE_CUTTER.match(cn_stripped):
             return '0', 'Library of Congress', 'High', 'LC with date and cutter'
         # LC with decimal but no cutter
-        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}\s*\.\d+', cn_stripped, re.IGNORECASE):
+        if _RE_LC_DECIMAL.match(cn_stripped):
             return '0', 'Library of Congress', 'Medium', 'LC class with decimal'
         # LC with cutter directly attached (no dot, no space)
         # e.g., PQ2402A3, M1510S3.8, PR3716F55L, N6953R4
-        if re.match(r'^[A-Z]{1,3}\d{1,4}[A-Z]\d*', cn_stripped):
+        if _RE_LC_CUTTER_NOSEP.match(cn_stripped):
             return '0', 'Library of Congress', 'Medium', 'LC with cutter (no separator)'
         # Simple LC (just class and number)
-        if re.match(r'^[A-Z]{1,3}\s*\d{1,4}(\s|$)', cn_stripped, re.IGNORECASE):
+        if _RE_LC_SIMPLE.match(cn_stripped):
             return '0', 'Library of Congress', 'Medium', 'LC class and number'
 
     # === LOCAL COLLECTION SCHEMES ===
@@ -723,22 +848,22 @@ def _classify_call_number(cn_stripped):
         return '4', 'Shelving control number', conf, note
 
     # === OTHER AV PATTERNS ===
-    if re.match(r'^(DVD|VHS|CD|VID|TAPE|VIDEO)\s*\d', cn_stripped, re.IGNORECASE):
+    if _RE_AV_TAIL.match(cn_stripped):
         return '4', 'Shelving control number', 'High', 'AV format shelving'
-    if re.match(r'^(Circ|Arch)\s*(CD|DVD|Video|VHS)', cn_stripped, re.IGNORECASE):
+    if _RE_AV_CIRC.match(cn_stripped):
         return '4', 'Shelving control number', 'High', 'AV circulation shelving'
 
     # === LOCAL SCHEMES ===
-    if re.match(r'^\d{2}\s+[A-Z]\d', cn_stripped):
-        return '7', 'Local scheme', 'Medium', 'Local shelving (2-digit prefix)'
-    if re.match(r'^\d{4}-\d{1,2}-\d{1,2}', cn_stripped):
-        return '7', 'Local scheme', 'High', 'Date-based shelving'
-    if re.match(r'^\d{4,}-\d+', cn_stripped):
-        return '7', 'Local scheme', 'Medium', 'Accession number'
+    if _RE_LOCAL_2DIGIT.match(cn_stripped):
+        return '4', 'Shelving control number', 'Medium', 'Local shelving (2-digit prefix)'
+    if _RE_LOCAL_DATE.match(cn_stripped):
+        return '4', 'Shelving control number', 'High', 'Date-based shelving'
+    if _RE_LOCAL_ACCESSION.match(cn_stripped):
+        return '4', 'Shelving control number', 'Medium', 'Accession number'
 
     # === LOCAL NOTATION ===
-    if re.match(r'^[*#]', cn_stripped):
-        return '7', 'Local scheme', 'Low', 'Local notation'
+    if _RE_LOCAL_NOTATION.match(cn_stripped):
+        return '4', 'Shelving control number', 'Low', 'Local notation'
 
     return None
 
@@ -918,7 +1043,7 @@ def create_excel_output(df, output_path):
         cell.alignment = Alignment(horizontal='center', wrap_text=True)
         cell.border = thin_border
 
-    for row_idx, row in df.iterrows():
+    for excel_row, (_, row) in enumerate(df.iterrows(), 2):
         data = [
             row['Permanent Call Number'], row['Extracted Call Number'],
             row['Permanent Call Number Type'], row['852 MARC'],
@@ -929,7 +1054,7 @@ def create_excel_output(df, output_path):
             row['Subfield Changes'], row['Notes']
         ]
         for col_idx, value in enumerate(data, 1):
-            cell = ws_data.cell(row=row_idx + 2, column=col_idx, value=value)
+            cell = ws_data.cell(row=excel_row, column=col_idx, value=value)
             cell.font = data_font
             cell.border = thin_border
             if col_idx in id_col_indices:
@@ -1125,6 +1250,621 @@ def create_excel_output(df, output_path):
 
 
 # =============================================================================
+# HTML REPORT
+# =============================================================================
+
+# HTML template with placeholder tokens (__TOKEN__) that get replaced by Python.
+# Using placeholders instead of f-strings avoids escaping all the {} in CSS/JS.
+
+_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>852 Field Analysis Report</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: Arial, sans-serif;
+    font-size: 12pt;
+    background: #f5f5f5;
+    color: #333;
+    line-height: 1.5;
+}
+
+header {
+    background: #4472C4;
+    color: white;
+    padding: 24px 32px;
+}
+header h1 { font-size: 18pt; }
+header .subtitle { font-size: 11pt; opacity: 0.9; margin-top: 4px; }
+
+/* Dashboard cards */
+#dashboard {
+    display: flex;
+    gap: 16px;
+    padding: 24px 32px;
+    flex-wrap: wrap;
+}
+.card {
+    flex: 1;
+    min-width: 180px;
+    padding: 16px 20px;
+    border-radius: 8px;
+    text-align: center;
+}
+.card .big-number { font-size: 28pt; font-weight: bold; }
+.card .label { font-size: 10pt; margin-top: 4px; }
+.card-yes    { background: #FFC7CE; color: #9C0006; }
+.card-review { background: #FFEB9C; color: #9C6500; }
+.card-no     { background: #C6EFCE; color: #006100; }
+.card-info   { background: #D6E4F0; color: #2C5282; }
+
+/* Filter controls */
+#controls {
+    padding: 16px 32px;
+    background: white;
+    border-bottom: 1px solid #ddd;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+}
+.filter-group { display: flex; flex-direction: column; gap: 2px; }
+.filter-group label {
+    font-size: 9pt;
+    font-weight: bold;
+    color: #555;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+#controls select, #controls input {
+    font-family: Arial, sans-serif;
+    font-size: 11pt;
+    padding: 6px 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+#search-box { min-width: 200px; }
+
+/* Table */
+#table-container {
+    padding: 0 32px 32px;
+    overflow-x: auto;
+}
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 16px;
+    background: white;
+}
+th {
+    background: #4472C4;
+    color: white;
+    padding: 10px 12px;
+    text-align: left;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    font-size: 11pt;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    border-bottom: 3px solid #4472C4;
+    transition: background 0.15s;
+}
+th:hover { background: #365FA0; }
+th .sort-arrow {
+    margin-left: 4px;
+    font-size: 9pt;
+    opacity: 0.4;
+}
+th.sorted { background: #365FA0; border-bottom: 3px solid #FFC000; }
+th.sorted .sort-arrow { opacity: 1; }
+td {
+    padding: 8px 12px;
+    border-bottom: 1px solid #e5e5e5;
+    font-size: 11pt;
+}
+tr:hover { background: #f0f4ff; }
+
+/* Color-coded cells */
+td.change-yes    { background: #FFC7CE; color: #9C0006; font-weight: bold; }
+td.change-no     { background: #C6EFCE; color: #006100; }
+td.change-review { background: #FFEB9C; color: #9C6500; font-weight: bold; }
+td.conf-high   { background: #C6EFCE; color: #006100; }
+td.conf-medium { background: #FFEB9C; color: #9C6500; }
+td.conf-low    { background: #FFC7CE; color: #9C0006; }
+td.not-cn { color: #CC0000; font-weight: bold; }
+
+/* Primo links */
+a { color: #2B5797; }
+a:visited { color: #6B4C9A; }
+a:hover { color: #1A3A6B; text-decoration: underline; }
+
+/* Row count and footer */
+#row-count {
+    margin-top: 12px;
+    font-size: 10pt;
+    color: #666;
+}
+footer {
+    padding: 24px 32px;
+    text-align: center;
+    color: #888;
+    font-size: 10pt;
+}
+#export-csv {
+    font-family: Arial, sans-serif;
+    font-size: 11pt;
+    padding: 10px 24px;
+    background: #4472C4;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-bottom: 12px;
+}
+#export-csv:hover { background: #365FA0; }
+</style>
+</head>
+<body>
+
+<header>
+    <h1>852 First Indicator Analysis</h1>
+    <p class="subtitle">Generated __DATE__ &mdash; __TOTAL__ records analyzed, __COUNT_CHANGES__ shown below</p>
+</header>
+
+<section id="dashboard">
+    <div class="card card-yes">
+        <div class="big-number">__COUNT_YES__</div>
+        <div class="label">changes needed</div>
+    </div>
+    <div class="card card-review">
+        <div class="big-number">__COUNT_REVIEW__</div>
+        <div class="label">need manual review</div>
+    </div>
+    <div class="card card-no">
+        <div class="big-number">__COUNT_NO__</div>
+        <div class="label">already correct</div>
+    </div>
+    <div class="card card-info">
+        <div class="big-number">__COUNT_INSTITUTIONS__</div>
+        <div class="label">institutions</div>
+    </div>
+</section>
+
+<section id="controls">
+    <div class="filter-group">
+        <label for="filter-institution">Institution</label>
+        <select id="filter-institution"><option value="all">All Institutions</option></select>
+    </div>
+    <div class="filter-group">
+        <label for="filter-change">Change Needed</label>
+        <select id="filter-change">
+            <option value="all">All Changes</option>
+            <option value="yes">Yes only</option>
+            <option value="review">Review only</option>
+        </select>
+    </div>
+    <div class="filter-group">
+        <label for="filter-confidence">Confidence</label>
+        <select id="filter-confidence">
+            <option value="all">All</option>
+            <option value="High">High</option>
+            <option value="Medium">Medium</option>
+            <option value="Low">Low</option>
+        </select>
+    </div>
+    <div class="filter-group">
+        <label for="filter-class-type">Classification</label>
+        <select id="filter-class-type"><option value="all">All Types</option></select>
+    </div>
+    <div class="filter-group">
+        <label for="filter-subfield">Subfield Changes</label>
+        <select id="filter-subfield"><option value="all">All</option></select>
+    </div>
+    <div class="filter-group">
+        <label for="search-box">Search</label>
+        <input type="text" id="search-box" placeholder="Search call numbers, notes...">
+    </div>
+</section>
+
+<section id="table-container">
+    <table id="data-table">
+        <thead>
+            <tr>
+                <th onclick="sortTable(0)">Institution <span class="sort-arrow"></span></th>
+                <th onclick="sortTable(1)">Call Number <span class="sort-arrow"></span></th>
+                <th onclick="sortTable(2)">Current <span class="sort-arrow"></span></th>
+                <th onclick="sortTable(3)">Suggested <span class="sort-arrow"></span></th>
+                <th onclick="sortTable(4)">Change Needed <span class="sort-arrow"></span></th>
+                <th onclick="sortTable(5)">Classification <span class="sort-arrow"></span></th>
+                <th onclick="sortTable(6)">Confidence <span class="sort-arrow"></span></th>
+                <th onclick="sortTable(7)">Subfield Changes <span class="sort-arrow"></span></th>
+                <th onclick="sortTable(8)">Notes <span class="sort-arrow"></span></th>
+                <th onclick="sortTable(9)">MMS Id <span class="sort-arrow"></span></th>
+            </tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+    </table>
+    <p id="row-count"></p>
+</section>
+
+<footer>
+    <button id="export-csv" onclick="exportCSV()">Export Filtered Data as CSV</button>
+    <p>Generated by 852 First Indicator Analysis Script</p>
+</footer>
+
+<script>
+// ============================================================
+// DATA (injected by Python)
+// ============================================================
+var ALL_DATA = __JSON_DATA__;
+
+// Column keys in display order (must match <th> order above)
+var COLS = [
+    'institution', 'callNumber', 'currentInd', 'suggestedInd',
+    'changeNeeded', 'classType', 'confidence', 'subfieldChanges',
+    'notes', 'mmsId'
+];
+
+// ============================================================
+// BUILD TABLE
+// ============================================================
+function buildTable() {
+    var tbody = document.getElementById('table-body');
+    var html = '';
+    for (var i = 0; i < ALL_DATA.length; i++) {
+        var r = ALL_DATA[i];
+        // CSS classes for color-coded cells
+        var changeCls = '';
+        if (r.changeNeeded === 'Yes') changeCls = 'change-yes';
+        else if (r.changeNeeded === 'Review') changeCls = 'change-review';
+        else if (r.changeNeeded === 'No') changeCls = 'change-no';
+
+        var confCls = '';
+        if (r.confidence === 'High') confCls = 'conf-high';
+        else if (r.confidence === 'Medium') confCls = 'conf-medium';
+        else if (r.confidence === 'Low') confCls = 'conf-low';
+
+        var classCls = '';
+        if (r.classType === 'Not a call number') classCls = 'not-cn';
+
+        // Build search text for text filtering (lowercase, concatenated)
+        var searchText = (r.callNumber + ' ' + r.classType + ' ' + r.notes + ' ' +
+                          r.subfieldChanges + ' ' + r.mmsId).toLowerCase();
+
+        html += '<tr'
+            + ' data-institution="' + escAttr(r.institution) + '"'
+            + ' data-change="' + escAttr(r.changeNeeded) + '"'
+            + ' data-confidence="' + escAttr(r.confidence) + '"'
+            + ' data-class-type="' + escAttr(r.classType) + '"'
+            + ' data-subfield="' + escAttr(r.subfieldChanges) + '"'
+            + ' data-search="' + escAttr(searchText) + '"'
+            + '>'
+            + '<td>' + esc(r.institution) + '</td>'
+            + '<td>' + esc(r.callNumber) + '</td>'
+            + '<td>' + esc(r.currentInd) + '</td>'
+            + '<td>' + esc(r.suggestedInd) + '</td>'
+            + '<td class="' + changeCls + '">' + esc(r.changeNeeded) + '</td>'
+            + '<td class="' + classCls + '">' + esc(r.classType) + '</td>'
+            + '<td class="' + confCls + '">' + esc(r.confidence) + '</td>'
+            + '<td>' + esc(r.subfieldChanges) + '</td>'
+            + '<td>' + esc(r.notes) + '</td>'
+            + '<td>' + mmsIdCell(r.mmsId, r.primoCode) + '</td>'
+            + '</tr>';
+    }
+    tbody.innerHTML = html;
+}
+
+// HTML-escape to prevent XSS from call number content
+function esc(s) {
+    if (!s) return '';
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+}
+function escAttr(s) {
+    return esc(s);
+}
+// Build MMS Id cell — link to Primo source record if we have a CUNY code
+function mmsIdCell(mmsId, primoCode) {
+    if (!mmsId) return '';
+    if (!primoCode) return esc(mmsId);
+    var code = primoCode.toLowerCase();
+    var CODE = primoCode.toUpperCase();
+    var url = 'https://cuny-' + code + '.primo.exlibrisgroup.com/discovery/sourceRecord'
+            + '?vid=01CUNY_' + CODE + ':CUNY_' + CODE
+            + '&docId=alma' + encodeURIComponent(mmsId);
+    return '<a href="' + escAttr(url) + '" target="_blank" title="View in Primo">'
+         + esc(mmsId) + '</a>';
+}
+
+// ============================================================
+// FILTERING
+// ============================================================
+function applyFilters() {
+    var institution = document.getElementById('filter-institution').value;
+    var changeVal = document.getElementById('filter-change').value;
+    var confidence = document.getElementById('filter-confidence').value;
+    var classType = document.getElementById('filter-class-type').value;
+    var subfield = document.getElementById('filter-subfield').value;
+    var searchText = document.getElementById('search-box').value.toLowerCase();
+
+    var rows = document.querySelectorAll('#table-body tr');
+    var visible = 0;
+
+    for (var i = 0; i < rows.length; i++) {
+        var row = rows[i];
+        var show = true;
+
+        // Institution filter
+        if (institution !== 'all' && row.getAttribute('data-institution') !== institution) {
+            show = false;
+        }
+        // Change Needed filter
+        if (show && changeVal !== 'all') {
+            var ch = row.getAttribute('data-change');
+            if (changeVal === 'yes' && ch !== 'Yes') show = false;
+            else if (changeVal === 'review' && ch !== 'Review') show = false;
+        }
+        // Confidence filter
+        if (show && confidence !== 'all' && row.getAttribute('data-confidence') !== confidence) {
+            show = false;
+        }
+        // Classification type filter
+        if (show && classType !== 'all' && row.getAttribute('data-class-type') !== classType) {
+            show = false;
+        }
+        // Subfield changes filter
+        if (show && subfield !== 'all') {
+            var sf = row.getAttribute('data-subfield');
+            if (subfield === 'none' && sf) show = false;
+            else if (subfield === 'any' && !sf) show = false;
+            else if (subfield !== 'none' && subfield !== 'any' && sf.indexOf(subfield) === -1) show = false;
+        }
+        // Text search
+        if (show && searchText && row.getAttribute('data-search').indexOf(searchText) === -1) {
+            show = false;
+        }
+
+        row.style.display = show ? '' : 'none';
+        if (show) visible++;
+    }
+
+    document.getElementById('row-count').textContent =
+        'Showing ' + visible + ' of ' + ALL_DATA.length + ' records';
+}
+
+// ============================================================
+// SORTING
+// ============================================================
+var sortCol = -1;
+var sortAsc = true;
+
+function sortTable(colIndex) {
+    // Toggle direction if clicking the same column
+    if (sortCol === colIndex) {
+        sortAsc = !sortAsc;
+    } else {
+        sortCol = colIndex;
+        sortAsc = true;
+    }
+
+    // Update sort arrows and highlight active column
+    var ths = document.querySelectorAll('#data-table th');
+    for (var i = 0; i < ths.length; i++) {
+        var arrow = ths[i].querySelector('.sort-arrow');
+        if (i === colIndex) {
+            ths[i].classList.add('sorted');
+            if (arrow) arrow.textContent = sortAsc ? '\\u25B2' : '\\u25BC';
+        } else {
+            ths[i].classList.remove('sorted');
+            if (arrow) arrow.textContent = '\\u25E5';  // small unsorted indicator
+        }
+    }
+
+    // Sort the data array and rebuild the table
+    var key = COLS[colIndex];
+    ALL_DATA.sort(function(a, b) {
+        var va = (a[key] || '').toLowerCase();
+        var vb = (b[key] || '').toLowerCase();
+        if (va < vb) return sortAsc ? -1 : 1;
+        if (va > vb) return sortAsc ? 1 : -1;
+        return 0;
+    });
+
+    buildTable();
+    applyFilters();
+}
+
+// ============================================================
+// CSV EXPORT
+// ============================================================
+function exportCSV() {
+    var headers = [
+        'Institution Name', 'Extracted Call Number', 'Current Indicator',
+        'Suggested Indicator', 'Change Needed', 'Classification Type',
+        'Confidence', 'Subfield Changes', 'Notes', 'MMS Id'
+    ];
+
+    var rows = document.querySelectorAll('#table-body tr');
+    var csvRows = [headers.join(',')];
+
+    for (var i = 0; i < rows.length; i++) {
+        if (rows[i].style.display !== 'none') {
+            var cells = rows[i].querySelectorAll('td');
+            var vals = [];
+            for (var j = 0; j < cells.length; j++) {
+                var val = cells[j].textContent.replace(/"/g, '""');
+                vals.push('"' + val + '"');
+            }
+            csvRows.push(vals.join(','));
+        }
+    }
+
+    var blob = new Blob([csvRows.join('\\n')], { type: 'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement('a');
+    link.href = url;
+    link.download = 'call_number_changes.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+}
+
+// ============================================================
+// POPULATE DROPDOWNS
+// ============================================================
+function populateDropdown(selectId, values) {
+    var select = document.getElementById(selectId);
+    // Get unique values, sorted
+    var unique = [];
+    var seen = {};
+    for (var i = 0; i < values.length; i++) {
+        var v = values[i];
+        if (v && !seen[v]) {
+            seen[v] = true;
+            unique.push(v);
+        }
+    }
+    unique.sort();
+    for (var i = 0; i < unique.length; i++) {
+        var opt = document.createElement('option');
+        opt.value = unique[i];
+        opt.textContent = unique[i];
+        select.appendChild(opt);
+    }
+}
+
+// ============================================================
+// INITIALIZATION
+// ============================================================
+document.addEventListener('DOMContentLoaded', function() {
+    // Populate filter dropdowns from data
+    populateDropdown('filter-institution', ALL_DATA.map(function(r) { return r.institution; }));
+    populateDropdown('filter-class-type', ALL_DATA.map(function(r) { return r.classType; }));
+
+    // Populate subfield changes dropdown with special options + individual change types
+    var sfSelect = document.getElementById('filter-subfield');
+    var noneOpt = document.createElement('option');
+    noneOpt.value = 'none'; noneOpt.textContent = 'None needed';
+    sfSelect.appendChild(noneOpt);
+    var anyOpt = document.createElement('option');
+    anyOpt.value = 'any'; anyOpt.textContent = 'Any change';
+    sfSelect.appendChild(anyOpt);
+    // Extract individual change types (split on semicolons)
+    var sfTypes = [];
+    var sfSeen = {};
+    ALL_DATA.forEach(function(r) {
+        if (r.subfieldChanges) {
+            r.subfieldChanges.split(';').forEach(function(s) {
+                var trimmed = s.trim();
+                if (trimmed && !sfSeen[trimmed]) {
+                    sfSeen[trimmed] = true;
+                    sfTypes.push(trimmed);
+                }
+            });
+        }
+    });
+    sfTypes.sort();
+    sfTypes.forEach(function(t) {
+        var opt = document.createElement('option');
+        opt.value = t; opt.textContent = t;
+        sfSelect.appendChild(opt);
+    });
+
+    // Build the table
+    buildTable();
+
+    // Attach filter listeners
+    document.getElementById('filter-institution').addEventListener('change', applyFilters);
+    document.getElementById('filter-change').addEventListener('change', applyFilters);
+    document.getElementById('filter-confidence').addEventListener('change', applyFilters);
+    document.getElementById('filter-class-type').addEventListener('change', applyFilters);
+    document.getElementById('filter-subfield').addEventListener('change', applyFilters);
+    document.getElementById('search-box').addEventListener('input', applyFilters);
+
+    // Show default sort arrows on all columns (indicates they're sortable)
+    var ths = document.querySelectorAll('#data-table th .sort-arrow');
+    for (var i = 0; i < ths.length; i++) {
+        ths[i].textContent = '\\u25E5';
+    }
+
+    // Apply filters to update the row count display
+    applyFilters();
+});
+</script>
+</body>
+</html>"""
+
+
+def create_html_report(df, output_path):
+    """Create a self-contained interactive HTML report with analysis results.
+
+    Shows only records where Change Needed is 'Yes' or 'Review' by default,
+    with filters to expand the view. Includes a summary dashboard, sortable
+    table, text search, and CSV export.
+
+    Args:
+        df: DataFrame with all analysis columns (same as create_excel_output).
+        output_path: Path for the HTML file.
+    """
+
+    # Compute dashboard statistics from the FULL dataset before filtering
+    total = len(df)
+    count_yes = int((df.get('Change Needed') == 'Yes').sum()) if 'Change Needed' in df.columns else 0
+    count_review = int((df.get('Change Needed') == 'Review').sum()) if 'Change Needed' in df.columns else 0
+    count_no = int((df.get('Change Needed') == 'No').sum()) if 'Change Needed' in df.columns else 0
+    institutions = sorted(df['Institution Name'].dropna().unique().tolist()) \
+                   if 'Institution Name' in df.columns else []
+
+    # Filter to only records needing changes — the HTML report is for
+    # actionable items, not the full dataset. The Excel has everything.
+    df_changes = df[df['Change Needed'].isin(['Yes', 'Review'])].copy() \
+                 if 'Change Needed' in df.columns else df.copy()
+
+    # Build JSON data array from the filtered DataFrame
+    records = []
+    for _, row in df_changes.iterrows():
+        records.append({
+            'institution': str(row.get('Institution Name', '')),
+            'callNumber': str(row['Extracted Call Number'])
+                          if pd.notna(row.get('Extracted Call Number')) else '',
+            'currentInd': str(row.get('Current Indicator', '')),
+            'suggestedInd': str(row.get('Suggested Indicator', '')),
+            'changeNeeded': str(row.get('Change Needed', '')),
+            'classType': str(row.get('Classification Type', '')),
+            'confidence': str(row.get('Confidence', '')),
+            'subfieldChanges': str(row['Subfield Changes'])
+                               if pd.notna(row.get('Subfield Changes')) else '',
+            'notes': str(row['Notes'])
+                     if pd.notna(row.get('Notes')) else '',
+            'mmsId': str(row.get('MMS Id', '')),
+            'primoCode': CUNY_PRIMO_CODES.get(str(row.get('Institution Name', '')), ''),
+        })
+
+    json_data = json.dumps(records, ensure_ascii=False)
+
+    gen_date = datetime.now().strftime('%B %d, %Y at %I:%M %p')
+
+    # Replace placeholder tokens in the HTML template
+    html = _HTML_TEMPLATE
+    html = html.replace('__JSON_DATA__', json_data)
+    html = html.replace('__DATE__', gen_date)
+    html = html.replace('__TOTAL__', f'{total:,}')
+    html = html.replace('__COUNT_YES__', f'{count_yes:,}')
+    html = html.replace('__COUNT_REVIEW__', f'{count_review:,}')
+    html = html.replace('__COUNT_NO__', f'{count_no:,}')
+    html = html.replace('__COUNT_CHANGES__', f'{len(records):,}')
+    html = html.replace('__COUNT_INSTITUTIONS__', str(len(institutions)))
+
+    Path(output_path).write_text(html, encoding='utf-8')
+    print(f"HTML report saved: {output_path}")
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -1159,16 +1899,39 @@ def main(input_path, output_path):
         if col not in df.columns:
             df[col] = ''
     
+    # Clean up numeric institution codes. Analytics sometimes returns the
+    # Alma IZ code (e.g., "6129") instead of the institution name.
+    # Map known codes to names using the ALMA_IZ_CODES lookup table.
+    if 'Institution Name' in df.columns:
+        code_mask = df['Institution Name'].astype(str).isin(ALMA_IZ_CODES)
+        if code_mask.any():
+            count = code_mask.sum()
+            df.loc[code_mask, 'Institution Name'] = (
+                df.loc[code_mask, 'Institution Name']
+                .astype(str)
+                .map(ALMA_IZ_CODES)
+            )
+            print(f"  Mapped {count} IZ codes to institution names")
+
     print(f"Loaded {len(df)} records")
-    
+
     # Parse 852 MARC and extract call numbers
     print("Parsing 852 MARC fields...")
     df['Parsed MARC'] = df['852 MARC'].apply(parse_852_marc)
     marc_results = df['Parsed MARC'].apply(get_call_number_from_marc)
-    df['Extracted Call Number'] = marc_results.apply(lambda x: x[0])
-    df['From $j'] = marc_results.apply(lambda x: x[1])
-    df['J Combined'] = marc_results.apply(lambda x: x[2])
-    df['J Conflict'] = marc_results.apply(lambda x: x[3])
+    df[['Extracted Call Number', 'From $j', 'J Combined', 'J Conflict']] = pd.DataFrame(
+        marc_results.tolist(), index=df.index
+    )
+
+    # Check if the 852 field has any call number subfields ($h, $i, $j)
+    def _has_cn_subfields(parsed):
+        if not parsed:
+            return False
+        sf = parsed.get('subfields', {})
+        return bool(sf.get('h') or sf.get('i') or sf.get('j'))
+
+    df['Has CN Subfields'] = df['Parsed MARC'].apply(_has_cn_subfields)
+
     df['Call Number for Analysis'] = df.apply(
         lambda row: row['Extracted Call Number'] if row['Extracted Call Number'] else row['Permanent Call Number'],
         axis=1
@@ -1189,6 +1952,16 @@ def main(input_path, output_path):
     subfield_changes = []
 
     for _, row in df.iterrows():
+        # If the 852 field has no $h, $i, or $j, there's no call number
+        # to classify — skip the analysis entirely.
+        if not row['Has CN Subfields']:
+            indicators.append('N/A')
+            class_types.append('No call number in field')
+            confidences.append('High')
+            notes.append('852 has no $h, $i, or $j')
+            subfield_changes.append('')
+            continue
+
         cn = row['Call Number for Analysis']
         from_j = row['From $j']
         j_combined = row['J Combined']
@@ -1216,11 +1989,6 @@ def main(input_path, output_path):
                            else 'No'),
         axis=1)
 
-    # Suppressed column — populated when input data includes suppression status.
-    # For Analytics exports without this field, defaults to empty.
-    if 'Suppressed' not in df.columns:
-        df['Suppressed'] = ''
-    
     # Print summary
     print("\nClassification Summary:")
     print("=" * 60)
@@ -1231,7 +1999,12 @@ def main(input_path, output_path):
     # Create Excel output
     print(f"\nSaving to {output_path}...")
     create_excel_output(df, output_path)
-    
+
+    # Create interactive HTML report alongside the Excel file
+    html_path = str(Path(output_path).with_suffix('.html'))
+    print(f"Saving HTML report to {html_path}...")
+    create_html_report(df, html_path)
+
     print("Done!")
 
 

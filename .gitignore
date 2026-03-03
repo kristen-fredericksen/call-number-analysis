@@ -12,6 +12,7 @@ venv/
 # Data files (too large for git)
 data/*.xlsx
 data/*.csv
+data/*.html
 
 # OS
 .DS_Store
