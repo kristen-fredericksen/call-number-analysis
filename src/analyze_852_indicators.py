@@ -446,6 +446,15 @@ _RE_CLASS_LETTERS = re.compile(r'^([A-Z]{1,3})\s*\d', re.IGNORECASE)
 _RE_SUDOC = re.compile(r'^[A-Z]{1,4}\s*\d+\.[A-Z0-9\s/\-\.]+:', re.IGNORECASE)
 _RE_SUDOC_Y = re.compile(r'^Y\s*\d', re.IGNORECASE)
 
+# LC geographic cutter colon — colons in LC cutter notation for subordinate
+# locations (Tables G1548-G9804). Pattern: .Letter+Digits:Digits+Letter+Digits
+# Examples: G3424 .A35:2C3 (Canadian Forces Base at Aldershot, Nova Scotia),
+#           G1778 .P4:3C8 (Curitiba, Brazil)
+_RE_LC_CUTTER_COLON = re.compile(
+    r'^[A-Z]{1,3}\s*\d+\s*\.[A-Z]\d+:\d+[A-Z]\d+',
+    re.IGNORECASE
+)
+
 # NLM
 _RE_NLM_CLASS = re.compile(r'^(Q[S-Z]|W[A-Z]?)$')
 _RE_NLM_NUM = re.compile(r'^(Q[S-Z]|W[A-Z]?)\s*\d')
@@ -637,18 +646,26 @@ def is_sudoc(cn):
     Detect SuDoc (Superintendent of Documents) classification.
 
     The colon (:) is the strongest single indicator of SuDoc. A call number
-    containing a colon is almost always SuDoc. Very rarely, a colon may be
-    a data entry error in another scheme.
+    containing a colon is almost always SuDoc. Very rarely, a colon may
+    appear in LC call numbers — specifically in geographic cutter notation
+    for subordinate locations (LC Tables G1548-G9804).
 
-    Known limitation: Some LC Geography/Maps numbers use colons in table
-    notation (e.g., G1254.N4:2M3). These are exceedingly rare and will be
-    misclassified as SuDoc. See SKILL.md "The Colon Rule" for details.
+    In SuDoc, the colon appears in the class/stem area:
+        A 1.10:976, Y 4.J 89/1:S 53/5, HE 20.3152:P 94
+    In LC, the colon appears within a cutter for geographic subdivision:
+        G3424 .A35:2C3 (Canadian Forces Base at Aldershot)
+        G1778 .P4:3C8 (Curitiba, Brazil)
 
-    SuDoc pattern: Agency stem + number.number/series + : + item designation
-    Examples: A 1.10:976, Y 4.J 89/1:S 53/5, HE 20.3152:P 94,
-              C55.281/2-2:IM 1/2/CD, D 5.12/2: 6-03.7, GA 1.16/3-3: 996
+    The function distinguishes these by checking whether the colon follows
+    an LC cutter pattern (.LetterDigits:DigitsLetterDigits).
     """
     if ':' not in cn:
+        return False
+
+    # Exclude LC geographic cutter colons — the colon is inside a cutter
+    # for a subordinate location, not a SuDoc separator.
+    # Pattern: LC class + number + .Letter+Digits : Digits+Letter+Digits
+    if _RE_LC_CUTTER_COLON.match(cn):
         return False
 
     # Agency letters + number.anything + colon

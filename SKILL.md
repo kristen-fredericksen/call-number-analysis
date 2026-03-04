@@ -1,6 +1,6 @@
 ---
 name: call-number-analysis
-description: Analyze, parse, validate, and classify library call numbers including LC, Dewey, SuDoc, NLM, and LAC (Library and Archives Canada). Use this skill whenever working with call numbers, shelf locations, or bibliographic data containing call numbers. Triggers include any mention of LC call numbers, LCC, Dewey Decimal, SuDoc, government documents classification, NLM, LAC, FC class (Canadian history), PS8000 (Canadian literature), call number parsing, call number normalization, shelf order, classifying items by subject using call numbers, distinguishing local prefixes (like DVD, REF, OVERSIZE) from valid classification schemes, analyzing 852 MARC fields, identifying miscoded 852 indicators, or working with Alma/Ex Libris Analytics call number data. Also use when asked to identify subject areas from call numbers, validate whether a call number follows LC/Dewey/SuDoc conventions, or detect non-call-number data (notes, instructions) in call number fields. ALWAYS consult this skill before claiming any alphabetic prefix is or is not a valid LC class, and ALWAYS check for colons when distinguishing SuDoc from LC.
+description: Analyze, classify, and validate library call numbers (LC, Dewey, SuDoc, NLM, LAC). Use for any task involving call numbers, shelf locations, MARC 852 fields, or bibliographic data. Triggers include LC/LCC, Dewey, SuDoc, NLM, LAC, FC class, PS8000, call number parsing/normalization/shelf order, local prefixes (DVD, REF, OVERSIZE), miscoded 852 indicators, Alma Analytics call number data, identifying subjects from call numbers, or detecting non-call-number data in call number fields. ALWAYS consult before claiming any prefix is or is not a valid LC class. ALWAYS check colon position (stem vs cutter) when distinguishing SuDoc from LC.
 ---
 
 # Call Number Analysis Skill
@@ -66,30 +66,39 @@ In consortium environments (like CUNY, SUNY, CSU, etc.), local schemes vary by c
 | Feature | LC | SuDoc | Dewey | NLM |
 |---------|-----|-------|-------|-----|
 | **Starts with** | Valid LC letters | Agency stem | 3 digits | W or QS-QZ |
-| **Has colon (:)** | Almost never* | Almost always | Never | Never |
+| **Has colon (:)** | Only in cutters* | Almost always | Never | Never |
 | **Class structure** | Letters + number + cutter | Agency.bureau:series | Number + decimal + cutter | Letters + number + cutter |
 
-*\* LC call numbers almost never use colons. A colon in an LC-looking call number is almost always SuDoc; very rarely it may be a data entry error. One known exception: some LC Geography/Maps numbers in the G schedule use colons in table notation (e.g., `G1254.N4:2M3` for Manhattan, `G1254.N4:3B8` for Brooklyn). These are exceedingly rare. See "The Colon Rule" below.*
+*\* LC call numbers use colons only in geographic cutter notation for subordinate locations (e.g., `G3424 .A35:2C3` for Canadian Forces Base at Aldershot). The colon appears inside the cutter, not in the class/stem. In SuDoc, the colon is a separator in the class/stem (e.g., `A 1.10:976`). See "The Colon Rule" below.*
 
 #### SuDoc vs LC: The Colon Rule
 
-**The colon (`:`) is the strongest single indicator of SuDoc classification.** A call number containing a colon is almost always SuDoc. LC call numbers almost never use colons, so a colon in what looks like an LC call number is usually SuDoc or a data entry error.
+**The colon (`:`) is the strongest single indicator of SuDoc classification**, but where it appears matters.
 
-**Known LC exception:** Some Geography/Maps numbers in the G schedule use colons as part of LC table notation (e.g., `G1254.N4:2M3`, `G1254.N4:2S8`, `G1254.N4:3Q4`). These are exceedingly rare and will be misclassified as SuDoc by the script. They are documented here as a known limitation rather than handled in code.
+**In SuDoc**, the colon is a separator in the class/stem area, between the bureau number and the item designation:
+- `A 1.10:976` — colon after the bureau number
+- `Y 4.J 89/1:S 53/5` — colon separating series from item
 
-**In practice:** Treat a colon as strong evidence of SuDoc, but not absolute proof. If the content before the colon matches a SuDoc agency stem pattern (letter(s) + number.number), it's SuDoc with high confidence. If the colon appears in an otherwise clearly LC-structured call number with no SuDoc stem pattern, flag it for review as a possible error or a rare LC table notation.
+**In LC**, the colon appears only inside geographic cutter notation (LC Tables G1548-G9804) for subordinate locations — a place within a place:
+- `G3424 .A35:2C3` — `.A35` = Aldershot, `:2C3` = Canadian Forces Base *at* Aldershot
+- `G1778 .P4:3C8` — `.P4` = a region in Brazil, `:3C8` = Curitiba
+- `G3434 .F7:2U5` — `.F7` = Fredericton, `:2U5` = University of New Brunswick
+
+**The distinction**: In SuDoc, the colon follows the agency stem pattern (letters + number.number). In LC, the colon follows a cutter pattern (`.LetterDigits`). The script detects this difference and classifies accordingly.
 
 | Call Number | Classification | Why |
 |-------------|---------------|-----|
-| `A 1.10:976` | SuDoc | Has colon, SuDoc agency stem pattern |
-| `A 13.114/2:D 22/` | SuDoc | Has colon, SuDoc pattern |
-| `Y 4.J 89/1:S 53/5` | SuDoc | Has colon (Y = Congressional) |
-| `D 104.2:D 43/5` | SuDoc | Has colon, D = Defense |
-| `GA 1.16/3-3: 996` | SuDoc | Has colon, GA = General Accounting Office |
-| `HE 20.3152:` | SuDoc | Has colon, HE = HHS |
+| `A 1.10:976` | SuDoc | Colon in stem, SuDoc agency pattern |
+| `A 13.114/2:D 22/` | SuDoc | Colon in stem, SuDoc pattern |
+| `Y 4.J 89/1:S 53/5` | SuDoc | Colon in stem (Y = Congressional) |
+| `D 104.2:D 43/5` | SuDoc | Colon in stem, D = Defense |
+| `GA 1.16/3-3: 996` | SuDoc | Colon in stem, GA = General Accounting Office |
+| `HE 20.3152:` | SuDoc | Colon in stem, HE = HHS |
+| `G3424 .A35:2C3` | LC | Colon in cutter, geographic subdivision |
+| `G1778 .P4:3C8` | LC | Colon in cutter, geographic subdivision |
+| `G3434 .F7:2U5` | LC | Colon in cutter, geographic subdivision |
 | `HE 20 .S37` | LC | No colon, valid LC class HE |
 | `BX 1758.2 M53` | LC | No colon, valid LC class BX |
-| `BX1758.2 .M53` | LC | Same as above, different spacing |
 
 **Note:** Some SuDoc numbers have complex stems with slashes and hyphens before the colon (e.g., `C55.281/2-2:IM 1/2/CD`, `D 5.12/2: 6-03.7`). Always scan the full string for a colon, not just the portion immediately after the agency stem.
 
@@ -413,7 +422,7 @@ In Analytics, use "is between" operator on Normalized Call Number field:
 When analyzing call numbers:
 
 1. [ ] **Check for non-call-numbers first** (notes, instructions, URLs, equipment, format descriptors alone)
-2. [ ] **Look for colons** — presence of `:` strongly indicates SuDoc (very rarely a data entry error or LC G-schedule table notation)
+2. [ ] **Look for colons** — a colon in the class/stem area indicates SuDoc; a colon inside a cutter (`.LetterDigits:DigitsLetterDigits`) indicates LC geographic subdivision
 3. [ ] **Examine the starting letters** against valid LC classes (remember: no I, O, W, X, Y in LC)
 4. [ ] **Check for NLM patterns** (W, QS-QZ followed by numbers)
 5. [ ] **Check for LAC patterns** (FC + number, or PS + number ≥ 8000)
@@ -633,8 +642,9 @@ START
   │   ├─ Remainder classifies? → Use that classification + note prefix
   │   └─ Remainder does NOT classify? → Ambiguous: flag for review
   │
-  ├─ Contains colon (:)? → Likely SUDOC (indicator 3)
-  │   └─ If no SuDoc stem pattern, flag for review (may be data entry error)
+  ├─ Contains colon (:)?
+  │   ├─ Colon in cutter (.LetterDigits:DigitsLetterDigits)? → LC geographic subdivision (indicator 0)
+  │   └─ Colon in stem area? → SUDOC (indicator 3)
   │
   ├─ Starts with Y + number? → SUDOC (indicator 3) [Congressional]
   │
