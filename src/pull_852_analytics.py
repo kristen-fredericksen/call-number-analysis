@@ -34,6 +34,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 REPORT_PATHS = {
     'BM': '/shared/Manhattan Community College 01CUNY_BM/Reports/852 Field Analysis - All Indicators',
     'KB': '/shared/Kingsborough Community College 01CUNY_KB/Cataloging/852 Field Analysis - All Indicators',
+    'QC': '/shared/Queens College 01CUNY_QC/Reports/852 Field Analysis - All Indicators',
 }
 
 # Map school codes to their API key variable names in api_keys.env
@@ -74,6 +75,7 @@ ANALYTICS_TO_SCRIPT_COLUMNS = {
     'Permanent Call Number': 'Permanent Call Number',
     'Suppressed from Discovery': 'Suppressed',
     'Institution Name': 'Institution Name',
+    'Library Name': 'Library Name',
 }
 
 
@@ -169,16 +171,23 @@ def fetch_analytics_report(base_url, api_key, report_path, limit=1000):
             if column_names:
                 print(f"({len(column_names)} columns)", end=' ')
 
-        # Extract rows
+        # Extract rows. Column elements have tags like "Column0", "Column5",
+        # etc. When a column is empty, Analytics may skip it entirely, so we
+        # must parse the column index from the tag and place each value at
+        # the correct position (not just append in order).
         rows_found = 0
         for row_elem in rowset.iter():
             if 'Row' in row_elem.tag and row_elem.tag != rowset.tag:
-                # Skip the Row tag itself, get its children (Column elements)
-                values = []
+                indexed_values = {}
                 for col_elem in row_elem:
-                    values.append(col_elem.text if col_elem.text else '')
-                if values:
-                    all_rows.append(values)
+                    # Tag might be namespaced: {ns}Column5 → extract "5"
+                    tag = col_elem.tag.split('}')[-1] if '}' in col_elem.tag else col_elem.tag
+                    # Extract the column number from the tag (e.g., "Column5" → 5)
+                    col_num = ''.join(c for c in tag if c.isdigit())
+                    if col_num:
+                        indexed_values[int(col_num)] = col_elem.text if col_elem.text else ''
+                if indexed_values:
+                    all_rows.append(indexed_values)
                     rows_found += 1
 
         print(f"{rows_found} rows")
@@ -203,83 +212,77 @@ def _extract_column_names(root):
     """
     Extract column names from the Analytics API response.
 
-    The response contains an XSD schema with column definitions.
-    Column names appear as 'name' attributes on elements, or as
-    'saw-sql:columnHeading' attributes.
-    """
-    names = []
+    Returns a dict mapping column index (int) to column heading (str),
+    e.g. {0: 'Column 0', 5: 'MMS Id', 6: '852 MARC', ...}.
 
-    # Strategy 1: Look for columnHeading attributes in the schema
+    The schema elements are named like "Column0", "Column5", etc., and
+    each has a columnHeading attribute with the human-readable name.
+    Matching by index (not list position) is essential because different
+    schools' reports may have different extra columns, and Analytics
+    skips empty columns in the XML rows.
+    """
+    indexed_names = {}
+
+    # Look for columnHeading attributes in the schema, paired with the
+    # Column index from the element's 'name' attribute (e.g., "Column5").
     for elem in root.iter():
         heading = elem.attrib.get('{urn:saw-sql}columnHeading')
         if not heading:
-            # Try without namespace prefix
             for attr_name, attr_val in elem.attrib.items():
                 if 'columnHeading' in attr_name:
                     heading = attr_val
                     break
         if heading:
-            names.append(heading)
+            # Get the column index from the 'name' attribute (e.g., "Column5")
+            col_tag = elem.attrib.get('name', '')
+            col_num = ''.join(c for c in col_tag if c.isdigit())
+            if col_num:
+                indexed_names[int(col_num)] = heading
 
-    if names:
-        return names
-
-    # Strategy 2: Look for Column/Name elements
-    for elem in root.iter():
-        if elem.tag.endswith('Column') or elem.tag == 'Column':
-            name_el = elem.find('Name')
-            if name_el is not None and name_el.text:
-                names.append(name_el.text)
-
-    return names if names else None
+    return indexed_names if indexed_names else None
 
 
-def rows_to_dataframe(column_names, rows):
+def rows_to_dataframe(column_names_map, rows):
     """
     Convert raw Analytics rows to a DataFrame with the columns the
     analysis script expects.
+
+    column_names_map is a dict mapping column index → heading name
+    (from the schema), e.g. {0: 'Column 0', 5: 'MMS Id', ...}.
+    Each row is also a dict mapping column index → value (from the
+    XML parsing). Both are matched by index so column order and
+    missing columns don't matter.
     """
-    if not column_names:
-        # Fall back to positional mapping based on the known report structure.
-        # Analytics returns columns alphabetically by full path, plus a
-        # leading dummy "Column 0". The report has 8 real columns:
-        #   s_0 (dummy), s_1 MMS Id, s_2 852 MARC, s_3 Holdings ID,
-        #   s_4 Normalized Call Number, s_5 Permanent Call Number Type,
-        #   s_6 Permanent Call Number, s_7 Suppressed, s_8 Institution Name
-        # But the API may reorder alphabetically. Use positional fallback.
-        print("  Warning: Could not extract column names. Using positional mapping.")
-        expected = [
-            'Dummy', 'MMS Id', '852 MARC', 'Holdings ID',
-            'Normalized Call Number', 'Permanent Call Number Type',
-            'Permanent Call Number', 'Suppressed', 'Institution Name',
-            'Institution Code'
-        ]
-        # Trim to match actual column count
-        col_count = len(rows[0]) if rows else 0
-        column_names = expected[:col_count]
+    if not column_names_map or not rows:
+        print("  Warning: No column names or no data rows.")
+        return pd.DataFrame()
 
-    df = pd.DataFrame(rows, columns=column_names[:len(rows[0])] if rows else column_names)
-
-    # Drop dummy columns (Column 0, numeric-only columns, DESCRIPTOR_IDOF)
-    for col in list(df.columns):
-        if col in ('Column 0', '0', 'Dummy') or 'DESCRIPTOR' in str(col).upper():
-            df = df.drop(columns=[col])
-
-    # Rename columns to match what the analysis script expects.
-    # Use exact match first to avoid substring collisions (e.g.,
-    # "Permanent Call Number" matching "Permanent Call Number Type").
-    rename_map = {}
-    for analytics_name, script_name in ANALYTICS_TO_SCRIPT_COLUMNS.items():
+    # Build a list of (index, analytics_name, script_name) for columns
+    # we want to keep — i.e., columns whose Analytics heading matches
+    # something in ANALYTICS_TO_SCRIPT_COLUMNS.
+    keep_columns = []
+    for idx, heading in sorted(column_names_map.items()):
         # Try exact match first
-        if analytics_name in df.columns and analytics_name not in rename_map:
-            rename_map[analytics_name] = script_name
+        if heading in ANALYTICS_TO_SCRIPT_COLUMNS:
+            keep_columns.append((idx, ANALYTICS_TO_SCRIPT_COLUMNS[heading]))
             continue
         # Fall back to substring match
-        for col in df.columns:
-            if analytics_name in str(col) and col not in rename_map:
-                rename_map[col] = script_name
+        for analytics_name, script_name in ANALYTICS_TO_SCRIPT_COLUMNS.items():
+            if analytics_name in heading:
+                keep_columns.append((idx, script_name))
                 break
-    df = df.rename(columns=rename_map)
+
+    if not keep_columns:
+        print("  Warning: No matching columns found in Analytics response.")
+        return pd.DataFrame()
+
+    # Build the DataFrame by pulling the correct index from each row.
+    data = []
+    for row in rows:
+        data.append([row.get(idx, '') for idx, _ in keep_columns])
+
+    col_names = [name for _, name in keep_columns]
+    df = pd.DataFrame(data, columns=col_names)
 
     return df
 
@@ -389,7 +392,6 @@ def main():
         # Convert to DataFrame
         df = rows_to_dataframe(column_names, rows)
         print(f"  Columns: {list(df.columns)}")
-        print(f"  Records after cleanup: {len(df)}")
 
         # Save
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')

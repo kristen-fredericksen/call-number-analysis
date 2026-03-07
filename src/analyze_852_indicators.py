@@ -68,9 +68,7 @@ ALMA_IZ_CODES = {
 }
 
 # Maps institution names (as they appear in Analytics) to CUNY Primo codes.
-# Used to build links like:
-#   https://cuny-kb.primo.exlibrisgroup.com/discovery/sourceRecord?
-#       vid=01CUNY_KB:CUNY_KB&docId=alma990001234560106129
+# Used to build permalink URLs to Primo VE.
 CUNY_PRIMO_CODES = {
     'Baruch College': 'BB',
     'Borough of Manhattan Community College': 'BM',
@@ -94,6 +92,16 @@ CUNY_PRIMO_CODES = {
     'Queensborough Community College': 'QB',
     'The City College of New York': 'CC',
     'York College': 'YC',
+}
+
+# Primo VE search profile scope codes (IZ scope) per school code.
+# Used in permalink URLs:
+#   https://cuny-kb.primo.exlibrisgroup.com/permalink/01CUNY_KB/169j6ul/alma{MMS_ID}
+# Add scope codes here as schools are onboarded.
+PRIMO_SCOPE_CODES = {
+    'BM': 'pafot',
+    'KB': '60uq85',
+    'QC': '1j7jakf',
 }
 
 
@@ -173,6 +181,13 @@ def get_call_number_from_marc(parsed_marc):
     h = subfields.get('h', '')
     i = subfields.get('i', '')
     j = subfields.get('j', '')
+
+    # Strip trailing period from $h for classification purposes.
+    # A trailing period on $h (e.g., "PL955.") usually means the period
+    # belongs at the start of the cutter in $i (e.g., ".K4913").
+    # Leaving it in prevents the classifier from recognizing the pattern.
+    if h and h.endswith('.') and i:
+        h = h[:-1].rstrip()
 
     if j:
         if h or i:
@@ -368,6 +383,10 @@ _PUBLIC_NOTE_PATTERNS = [re.compile(p) for p in [
 
     # Location/room references
     r'(?i)reading\s+room',
+    r'(?i)\d+(st|nd|rd|th)\s+floor',
+
+    # Format + location notes (e.g., "Bound volumes: 3rd floor")
+    r'(?i)bound\s+volume',
 
     # Loan period/circulation notes
     r'(?i)\d+[- ]?(day|week|hour)\s+(loan|checkout|reserve)',
@@ -469,7 +488,7 @@ _RE_DEWEY_CUTTER = re.compile(r'^(\d{3})\s+([A-Z]\d+[A-Z]?)(\s|$)', re.IGNORECAS
 _RE_DEWEY_AUTHOR = re.compile(r'^(\d{3})\s+[A-Z][a-z]{1,4}\b')
 
 # Local reserve labels
-_RE_RESERVE_EDITION = re.compile(r'^[A-Z]{1,3}\s*\d{4}\s+\d+(st|nd|rd|th)\s+Ed', re.IGNORECASE)
+_RE_RESERVE_EDITION = re.compile(r'^[A-Za-z]+\s*\d{4}\s+\d+(st|nd|rd|th)\s+Ed', re.IGNORECASE)
 _RE_RESERVE_YEAR = re.compile(r'^[A-Z]{1,3}\s+\d{1,2}\s+\d{4}\s*$', re.IGNORECASE)
 
 # LC classification
@@ -1042,13 +1061,13 @@ def create_excel_output(df, output_path):
     change_no_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
     change_review_fill = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')
 
-    # ID columns (MMS Id = 7, Holdings ID = 8) — stored as text
-    id_col_indices = {7, 8}
+    # ID columns (MMS Id = 8, Holdings ID = 9) — stored as text
+    id_col_indices = {8, 9}
 
     headers = [
         'Permanent Call Number', 'Extracted Call Number', 'Permanent Call Number Type',
-        '852 MARC', 'Normalized Call Number', 'Institution Name', 'MMS Id',
-        'Holdings ID', 'Suppressed',
+        '852 MARC', 'Normalized Call Number', 'Institution Name', 'Library Name',
+        'MMS Id', 'Holdings ID', 'Suppressed',
         'Current Indicator', 'Suggested Indicator', 'Change Needed',
         'Classification Type', 'Confidence', 'Subfield Changes', 'Notes'
     ]
@@ -1064,8 +1083,8 @@ def create_excel_output(df, output_path):
         data = [
             row['Permanent Call Number'], row['Extracted Call Number'],
             row['Permanent Call Number Type'], row['852 MARC'],
-            row['Normalized Call Number'], row['Institution Name'], row['MMS Id'],
-            row['Holdings ID'], row['Suppressed'],
+            row['Normalized Call Number'], row['Institution Name'], row['Library Name'],
+            row['MMS Id'], row['Holdings ID'], row['Suppressed'],
             row['Current Indicator'], row['Suggested Indicator'], row['Change Needed'],
             row['Classification Type'], row['Confidence'],
             row['Subfield Changes'], row['Notes']
@@ -1076,33 +1095,33 @@ def create_excel_output(df, output_path):
             cell.border = thin_border
             if col_idx in id_col_indices:
                 cell.number_format = '@'
-            # Change Needed column coloring (column 12)
-            if col_idx == 12:
+            # Change Needed column coloring (column 13)
+            if col_idx == 13:
                 if value == 'Yes':
                     cell.fill = change_yes_fill
                 elif value == 'No':
                     cell.fill = change_no_fill
                 elif value == 'Review':
                     cell.fill = change_review_fill
-            # Confidence column coloring (column 14)
-            if col_idx == 14 and value in conf_colors:
+            # Confidence column coloring (column 15)
+            if col_idx == 15 and value in conf_colors:
                 cell.fill = conf_colors[value]
-            # Not a call number highlighting (column 13)
-            if col_idx == 13 and value == 'Not a call number':
+            # Not a call number highlighting (column 14)
+            if col_idx == 14 and value == 'Not a call number':
                 cell.fill = not_cn_fill
                 cell.font = Font(name='Arial', size=12, bold=True)
 
     col_widths = {
         'A': 35, 'B': 30, 'C': 25, 'D': 60, 'E': 45,
-        'F': 30, 'G': 20, 'H': 20, 'I': 15,
-        'J': 18, 'K': 18, 'L': 15,
-        'M': 28, 'N': 12, 'O': 40, 'P': 55
+        'F': 30, 'G': 30, 'H': 20, 'I': 20, 'J': 15,
+        'K': 18, 'L': 18, 'M': 15,
+        'N': 28, 'O': 12, 'P': 40, 'Q': 55
     }
     for col, width in col_widths.items():
         ws_data.column_dimensions[col].width = width
 
     ws_data.freeze_panes = 'A2'
-    ws_data.auto_filter.ref = f"A1:P{len(df) + 1}"
+    ws_data.auto_filter.ref = f"A1:Q{len(df) + 1}"
     
     # === SHEET 2: Statistics ===
     ws_stats = wb.create_sheet("Statistics")
@@ -1343,8 +1362,30 @@ header .subtitle { font-size: 11pt; opacity: 0.9; margin-top: 4px; }
     padding: 6px 10px;
     border: 1px solid #ccc;
     border-radius: 4px;
+    height: 36px;
+    box-sizing: border-box;
 }
 #search-box { min-width: 200px; }
+
+/* Pagination */
+#pagination {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
+}
+#pagination button {
+    font-family: Arial, sans-serif;
+    font-size: 11pt;
+    padding: 6px 16px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: white;
+    cursor: pointer;
+}
+#pagination button:hover:not(:disabled) { background: #e8e8e8; }
+#pagination button:disabled { opacity: 0.4; cursor: default; }
+#page-info { font-size: 10pt; color: #555; }
 
 /* Table */
 #table-container {
@@ -1425,6 +1466,18 @@ footer {
     margin-bottom: 12px;
 }
 #export-csv:hover { background: #365FA0; }
+#reset-filters {
+    font-family: Arial, sans-serif;
+    font-size: 10pt;
+    padding: 6px 16px;
+    background: #4472C4;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    align-self: flex-end;
+}
+#reset-filters:hover { background: #365FA0; }
 </style>
 </head>
 <body>
@@ -1436,34 +1489,34 @@ footer {
 
 <section id="dashboard">
     <div class="card card-yes">
-        <div class="big-number">__COUNT_YES__</div>
+        <div class="big-number" id="dash-yes">__COUNT_YES__</div>
         <div class="label">changes needed</div>
     </div>
     <div class="card card-review">
-        <div class="big-number">__COUNT_REVIEW__</div>
+        <div class="big-number" id="dash-review">__COUNT_REVIEW__</div>
         <div class="label">need manual review</div>
     </div>
     <div class="card card-no">
-        <div class="big-number">__COUNT_NO__</div>
+        <div class="big-number" id="dash-no">__COUNT_NO__</div>
         <div class="label">already correct</div>
     </div>
     <div class="card card-info">
-        <div class="big-number">__COUNT_INSTITUTIONS__</div>
-        <div class="label">institutions</div>
+        <div class="big-number" id="dash-libraries">__COUNT_LIBRARIES__</div>
+        <div class="label">libraries</div>
     </div>
 </section>
 
 <section id="controls">
     <div class="filter-group">
-        <label for="filter-institution">Institution</label>
-        <select id="filter-institution"><option value="all">All Institutions</option></select>
+        <label for="filter-library">Library</label>
+        <select id="filter-library"><option value="all">All Libraries</option></select>
     </div>
     <div class="filter-group">
         <label for="filter-change">Change Needed</label>
         <select id="filter-change">
-            <option value="all">All Changes</option>
-            <option value="yes">Yes only</option>
-            <option value="review">Review only</option>
+            <option value="all">All</option>
+            <option value="yes">Yes</option>
+            <option value="review">Review</option>
         </select>
     </div>
     <div class="filter-group">
@@ -1477,15 +1530,26 @@ footer {
     </div>
     <div class="filter-group">
         <label for="filter-class-type">Classification</label>
-        <select id="filter-class-type"><option value="all">All Types</option></select>
+        <select id="filter-class-type"><option value="all">All</option></select>
     </div>
     <div class="filter-group">
         <label for="filter-subfield">Subfield Changes</label>
         <select id="filter-subfield"><option value="all">All</option></select>
     </div>
     <div class="filter-group">
+        <label for="filter-suppressed">Suppressed</label>
+        <select id="filter-suppressed">
+            <option value="all">All</option>
+            <option value="no">Not suppressed</option>
+            <option value="yes">Suppressed</option>
+        </select>
+    </div>
+    <div class="filter-group">
         <label for="search-box">Search</label>
         <input type="text" id="search-box" placeholder="Search call numbers, notes...">
+    </div>
+    <div class="filter-group">
+        <button id="reset-filters" onclick="resetFilters()">Reset Filters</button>
     </div>
 </section>
 
@@ -1493,7 +1557,7 @@ footer {
     <table id="data-table">
         <thead>
             <tr>
-                <th onclick="sortTable(0)">Institution <span class="sort-arrow"></span></th>
+                <th onclick="sortTable(0)">Library <span class="sort-arrow"></span></th>
                 <th onclick="sortTable(1)">Call Number <span class="sort-arrow"></span></th>
                 <th onclick="sortTable(2)">Current <span class="sort-arrow"></span></th>
                 <th onclick="sortTable(3)">Suggested <span class="sort-arrow"></span></th>
@@ -1503,11 +1567,18 @@ footer {
                 <th onclick="sortTable(7)">Subfield Changes <span class="sort-arrow"></span></th>
                 <th onclick="sortTable(8)">Notes <span class="sort-arrow"></span></th>
                 <th onclick="sortTable(9)">MMS Id <span class="sort-arrow"></span></th>
+                <th onclick="sortTable(10)">Holdings ID <span class="sort-arrow"></span></th>
+                <th onclick="sortTable(11)">Suppressed <span class="sort-arrow"></span></th>
             </tr>
         </thead>
         <tbody id="table-body"></tbody>
     </table>
     <p id="row-count"></p>
+    <div id="pagination">
+        <button id="page-prev" onclick="changePage(-1)">&laquo; Previous</button>
+        <span id="page-info"></span>
+        <button id="page-next" onclick="changePage(1)">Next &raquo;</button>
+    </div>
 </section>
 
 <footer>
@@ -1523,20 +1594,66 @@ var ALL_DATA = __JSON_DATA__;
 
 // Column keys in display order (must match <th> order above)
 var COLS = [
-    'institution', 'callNumber', 'currentInd', 'suggestedInd',
+    'library', 'callNumber', 'currentInd', 'suggestedInd',
     'changeNeeded', 'classType', 'confidence', 'subfieldChanges',
-    'notes', 'mmsId'
+    'notes', 'mmsId', 'holdingsId', 'suppressed'
 ];
 
+// Pagination state
+var PAGE_SIZE = 500;
+var currentPage = 1;
+var filteredData = [];
+
+// Pre-build search text for each record (once, at load time)
+for (var i = 0; i < ALL_DATA.length; i++) {
+    var r = ALL_DATA[i];
+    r._search = (r.callNumber + ' ' + r.classType + ' ' + r.notes + ' ' +
+                  r.subfieldChanges + ' ' + r.mmsId).toLowerCase();
+}
+
 // ============================================================
-// BUILD TABLE
+// HTML HELPERS
 // ============================================================
-function buildTable() {
+function esc(s) {
+    if (!s) return '';
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+}
+function escAttr(s) { return esc(s); }
+
+function mmsIdCell(mmsId, primoCode, scopeCode) {
+    if (!mmsId) return '';
+    if (!primoCode) return esc(mmsId);
+    var code = primoCode.toLowerCase();
+    var CODE = primoCode.toUpperCase();
+    var url;
+    if (scopeCode) {
+        // Permalink format (preferred)
+        url = 'https://cuny-' + code + '.primo.exlibrisgroup.com/permalink/01CUNY_'
+            + CODE + '/' + scopeCode + '/alma' + encodeURIComponent(mmsId);
+    } else {
+        // Fallback: raw MARC view (for schools without scope codes yet)
+        url = 'https://cuny-' + code + '.primo.exlibrisgroup.com/discovery/sourceRecord'
+            + '?vid=01CUNY_' + CODE + ':CUNY_' + CODE
+            + '&docId=alma' + encodeURIComponent(mmsId);
+    }
+    return '<a href="' + escAttr(url) + '" target="_blank" title="View in Primo">'
+         + esc(mmsId) + '</a>';
+}
+
+// ============================================================
+// RENDER CURRENT PAGE
+// ============================================================
+function renderPage() {
     var tbody = document.getElementById('table-body');
+    var totalPages = Math.ceil(filteredData.length / PAGE_SIZE) || 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    var start = (currentPage - 1) * PAGE_SIZE;
+    var end = Math.min(start + PAGE_SIZE, filteredData.length);
+
     var html = '';
-    for (var i = 0; i < ALL_DATA.length; i++) {
-        var r = ALL_DATA[i];
-        // CSS classes for color-coded cells
+    for (var i = start; i < end; i++) {
+        var r = filteredData[i];
         var changeCls = '';
         if (r.changeNeeded === 'Yes') changeCls = 'change-yes';
         else if (r.changeNeeded === 'Review') changeCls = 'change-review';
@@ -1550,19 +1667,8 @@ function buildTable() {
         var classCls = '';
         if (r.classType === 'Not a call number') classCls = 'not-cn';
 
-        // Build search text for text filtering (lowercase, concatenated)
-        var searchText = (r.callNumber + ' ' + r.classType + ' ' + r.notes + ' ' +
-                          r.subfieldChanges + ' ' + r.mmsId).toLowerCase();
-
-        html += '<tr'
-            + ' data-institution="' + escAttr(r.institution) + '"'
-            + ' data-change="' + escAttr(r.changeNeeded) + '"'
-            + ' data-confidence="' + escAttr(r.confidence) + '"'
-            + ' data-class-type="' + escAttr(r.classType) + '"'
-            + ' data-subfield="' + escAttr(r.subfieldChanges) + '"'
-            + ' data-search="' + escAttr(searchText) + '"'
-            + '>'
-            + '<td>' + esc(r.institution) + '</td>'
+        html += '<tr>'
+            + '<td>' + esc(r.library) + '</td>'
             + '<td>' + esc(r.callNumber) + '</td>'
             + '<td>' + esc(r.currentInd) + '</td>'
             + '<td>' + esc(r.suggestedInd) + '</td>'
@@ -1571,88 +1677,121 @@ function buildTable() {
             + '<td class="' + confCls + '">' + esc(r.confidence) + '</td>'
             + '<td>' + esc(r.subfieldChanges) + '</td>'
             + '<td>' + esc(r.notes) + '</td>'
-            + '<td>' + mmsIdCell(r.mmsId, r.primoCode) + '</td>'
+            + '<td>' + mmsIdCell(r.mmsId, r.primoCode, r.scopeCode) + '</td>'
+            + '<td>' + esc(r.holdingsId) + '</td>'
+            + '<td>' + esc(r.suppressed) + '</td>'
             + '</tr>';
     }
     tbody.innerHTML = html;
+
+    // Update row count and pagination controls
+    document.getElementById('row-count').textContent =
+        'Showing ' + (filteredData.length ? start + 1 : 0) + '–' + end +
+        ' of ' + filteredData.length.toLocaleString() + ' filtered records' +
+        ' (' + ALL_DATA.length.toLocaleString() + ' total)';
+
+    document.getElementById('page-info').textContent =
+        'Page ' + currentPage + ' of ' + totalPages;
+    document.getElementById('page-prev').disabled = (currentPage <= 1);
+    document.getElementById('page-next').disabled = (currentPage >= totalPages);
 }
 
-// HTML-escape to prevent XSS from call number content
-function esc(s) {
-    if (!s) return '';
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
-}
-function escAttr(s) {
-    return esc(s);
-}
-// Build MMS Id cell — link to Primo source record if we have a CUNY code
-function mmsIdCell(mmsId, primoCode) {
-    if (!mmsId) return '';
-    if (!primoCode) return esc(mmsId);
-    var code = primoCode.toLowerCase();
-    var CODE = primoCode.toUpperCase();
-    var url = 'https://cuny-' + code + '.primo.exlibrisgroup.com/discovery/sourceRecord'
-            + '?vid=01CUNY_' + CODE + ':CUNY_' + CODE
-            + '&docId=alma' + encodeURIComponent(mmsId);
-    return '<a href="' + escAttr(url) + '" target="_blank" title="View in Primo">'
-         + esc(mmsId) + '</a>';
+// ============================================================
+// PAGINATION
+// ============================================================
+function changePage(delta) {
+    var totalPages = Math.ceil(filteredData.length / PAGE_SIZE) || 1;
+    var newPage = currentPage + delta;
+    if (newPage >= 1 && newPage <= totalPages) {
+        currentPage = newPage;
+        renderPage();
+        // Scroll to top of table
+        document.getElementById('table-container').scrollIntoView({ behavior: 'smooth' });
+    }
 }
 
 // ============================================================
 // FILTERING
 // ============================================================
+function resetFilters() {
+    document.getElementById('filter-library').value = 'all';
+    document.getElementById('filter-change').value = 'all';
+    document.getElementById('filter-confidence').value = 'all';
+    document.getElementById('filter-class-type').value = 'all';
+    document.getElementById('filter-subfield').value = 'all';
+    document.getElementById('filter-suppressed').value = 'all';
+    document.getElementById('search-box').value = '';
+    applyFilters();
+}
+
 function applyFilters() {
-    var institution = document.getElementById('filter-institution').value;
+    var library = document.getElementById('filter-library').value;
     var changeVal = document.getElementById('filter-change').value;
     var confidence = document.getElementById('filter-confidence').value;
     var classType = document.getElementById('filter-class-type').value;
     var subfield = document.getElementById('filter-subfield').value;
+    var suppressed = document.getElementById('filter-suppressed').value;
     var searchText = document.getElementById('search-box').value.toLowerCase();
 
-    var rows = document.querySelectorAll('#table-body tr');
-    var visible = 0;
+    filteredData = [];
+    var countYes = 0, countReview = 0, countNo = 0;
+    var libSeen = {};
 
-    for (var i = 0; i < rows.length; i++) {
-        var row = rows[i];
+    for (var i = 0; i < ALL_DATA.length; i++) {
+        var r = ALL_DATA[i];
         var show = true;
 
-        // Institution filter
-        if (institution !== 'all' && row.getAttribute('data-institution') !== institution) {
-            show = false;
-        }
-        // Change Needed filter
+        if (library !== 'all' && r.library !== library) show = false;
         if (show && changeVal !== 'all') {
-            var ch = row.getAttribute('data-change');
-            if (changeVal === 'yes' && ch !== 'Yes') show = false;
-            else if (changeVal === 'review' && ch !== 'Review') show = false;
+            if (changeVal === 'yes' && r.changeNeeded !== 'Yes') show = false;
+            else if (changeVal === 'review' && r.changeNeeded !== 'Review') show = false;
         }
-        // Confidence filter
-        if (show && confidence !== 'all' && row.getAttribute('data-confidence') !== confidence) {
-            show = false;
-        }
-        // Classification type filter
-        if (show && classType !== 'all' && row.getAttribute('data-class-type') !== classType) {
-            show = false;
-        }
-        // Subfield changes filter
+        if (show && confidence !== 'all' && r.confidence !== confidence) show = false;
+        if (show && classType !== 'all' && r.classType !== classType) show = false;
         if (show && subfield !== 'all') {
-            var sf = row.getAttribute('data-subfield');
+            var sf = r.subfieldChanges || '';
             if (subfield === 'none' && sf) show = false;
             else if (subfield === 'any' && !sf) show = false;
             else if (subfield !== 'none' && subfield !== 'any' && sf.indexOf(subfield) === -1) show = false;
         }
-        // Text search
-        if (show && searchText && row.getAttribute('data-search').indexOf(searchText) === -1) {
-            show = false;
+        if (show && suppressed !== 'all') {
+            var sup = (r.suppressed || '').toLowerCase();
+            var isSuppressed = (sup === 'yes' || sup === 'true');
+            if (suppressed === 'yes' && !isSuppressed) show = false;
+            else if (suppressed === 'no' && isSuppressed) show = false;
         }
+        if (show && searchText && r._search.indexOf(searchText) === -1) show = false;
 
-        row.style.display = show ? '' : 'none';
-        if (show) visible++;
+        if (show) {
+            filteredData.push(r);
+            if (r.changeNeeded === 'Yes') countYes++;
+            else if (r.changeNeeded === 'Review') countReview++;
+            else if (r.changeNeeded === 'No') countNo++;
+            if (r.library) libSeen[r.library] = true;
+        }
     }
 
-    document.getElementById('row-count').textContent =
-        'Showing ' + visible + ' of ' + ALL_DATA.length + ' records';
+    // Update dashboard cards
+    document.getElementById('dash-yes').textContent = countYes.toLocaleString();
+    document.getElementById('dash-review').textContent = countReview.toLocaleString();
+    document.getElementById('dash-no').textContent = countNo.toLocaleString();
+    document.getElementById('dash-libraries').textContent = Object.keys(libSeen).length;
+
+    // Re-apply current sort if one is active
+    if (sortCol !== null) {
+        var key = COLS[sortCol];
+        filteredData.sort(function(a, b) {
+            var va = (a[key] || '').toLowerCase();
+            var vb = (b[key] || '').toLowerCase();
+            if (va < vb) return sortAsc ? -1 : 1;
+            if (va > vb) return sortAsc ? 1 : -1;
+            return 0;
+        });
+    }
+
+    // Reset to page 1 and render
+    currentPage = 1;
+    renderPage();
 }
 
 // ============================================================
@@ -1662,7 +1801,6 @@ var sortCol = -1;
 var sortAsc = true;
 
 function sortTable(colIndex) {
-    // Toggle direction if clicking the same column
     if (sortCol === colIndex) {
         sortAsc = !sortAsc;
     } else {
@@ -1670,7 +1808,6 @@ function sortTable(colIndex) {
         sortAsc = true;
     }
 
-    // Update sort arrows and highlight active column
     var ths = document.querySelectorAll('#data-table th');
     for (var i = 0; i < ths.length; i++) {
         var arrow = ths[i].querySelector('.sort-arrow');
@@ -1679,13 +1816,12 @@ function sortTable(colIndex) {
             if (arrow) arrow.textContent = sortAsc ? '\\u25B2' : '\\u25BC';
         } else {
             ths[i].classList.remove('sorted');
-            if (arrow) arrow.textContent = '\\u25E5';  // small unsorted indicator
+            if (arrow) arrow.textContent = '\\u25E5';
         }
     }
 
-    // Sort the data array and rebuild the table
     var key = COLS[colIndex];
-    ALL_DATA.sort(function(a, b) {
+    filteredData.sort(function(a, b) {
         var va = (a[key] || '').toLowerCase();
         var vb = (b[key] || '').toLowerCase();
         if (va < vb) return sortAsc ? -1 : 1;
@@ -1693,33 +1829,32 @@ function sortTable(colIndex) {
         return 0;
     });
 
-    buildTable();
-    applyFilters();
+    currentPage = 1;
+    renderPage();
 }
 
 // ============================================================
-// CSV EXPORT
+// CSV EXPORT (all filtered data, not just current page)
 // ============================================================
 function exportCSV() {
     var headers = [
-        'Institution Name', 'Extracted Call Number', 'Current Indicator',
+        'Library Name', 'Extracted Call Number', 'Current Indicator',
         'Suggested Indicator', 'Change Needed', 'Classification Type',
-        'Confidence', 'Subfield Changes', 'Notes', 'MMS Id'
+        'Confidence', 'Subfield Changes', 'Notes', 'MMS Id', 'Holdings ID',
+        'Suppressed'
     ];
 
-    var rows = document.querySelectorAll('#table-body tr');
     var csvRows = [headers.join(',')];
-
-    for (var i = 0; i < rows.length; i++) {
-        if (rows[i].style.display !== 'none') {
-            var cells = rows[i].querySelectorAll('td');
-            var vals = [];
-            for (var j = 0; j < cells.length; j++) {
-                var val = cells[j].textContent.replace(/"/g, '""');
-                vals.push('"' + val + '"');
-            }
-            csvRows.push(vals.join(','));
-        }
+    for (var i = 0; i < filteredData.length; i++) {
+        var r = filteredData[i];
+        var vals = [
+            r.library, r.callNumber, r.currentInd, r.suggestedInd,
+            r.changeNeeded, r.classType, r.confidence, r.subfieldChanges,
+            r.notes, r.mmsId, r.holdingsId, r.suppressed
+        ];
+        csvRows.push(vals.map(function(v) {
+            return '"' + (v || '').replace(/"/g, '""') + '"';
+        }).join(','));
     }
 
     var blob = new Blob([csvRows.join('\\n')], { type: 'text/csv;charset=utf-8;' });
@@ -1736,7 +1871,6 @@ function exportCSV() {
 // ============================================================
 function populateDropdown(selectId, values) {
     var select = document.getElementById(selectId);
-    // Get unique values, sorted
     var unique = [];
     var seen = {};
     for (var i = 0; i < values.length; i++) {
@@ -1759,11 +1893,9 @@ function populateDropdown(selectId, values) {
 // INITIALIZATION
 // ============================================================
 document.addEventListener('DOMContentLoaded', function() {
-    // Populate filter dropdowns from data
-    populateDropdown('filter-institution', ALL_DATA.map(function(r) { return r.institution; }));
+    populateDropdown('filter-library', ALL_DATA.map(function(r) { return r.library; }));
     populateDropdown('filter-class-type', ALL_DATA.map(function(r) { return r.classType; }));
 
-    // Populate subfield changes dropdown with special options + individual change types
     var sfSelect = document.getElementById('filter-subfield');
     var noneOpt = document.createElement('option');
     noneOpt.value = 'none'; noneOpt.textContent = 'None needed';
@@ -1771,7 +1903,6 @@ document.addEventListener('DOMContentLoaded', function() {
     var anyOpt = document.createElement('option');
     anyOpt.value = 'any'; anyOpt.textContent = 'Any change';
     sfSelect.appendChild(anyOpt);
-    // Extract individual change types (split on semicolons)
     var sfTypes = [];
     var sfSeen = {};
     ALL_DATA.forEach(function(r) {
@@ -1792,24 +1923,22 @@ document.addEventListener('DOMContentLoaded', function() {
         sfSelect.appendChild(opt);
     });
 
-    // Build the table
-    buildTable();
-
     // Attach filter listeners
-    document.getElementById('filter-institution').addEventListener('change', applyFilters);
+    document.getElementById('filter-library').addEventListener('change', applyFilters);
     document.getElementById('filter-change').addEventListener('change', applyFilters);
     document.getElementById('filter-confidence').addEventListener('change', applyFilters);
     document.getElementById('filter-class-type').addEventListener('change', applyFilters);
     document.getElementById('filter-subfield').addEventListener('change', applyFilters);
+    document.getElementById('filter-suppressed').addEventListener('change', applyFilters);
     document.getElementById('search-box').addEventListener('input', applyFilters);
 
-    // Show default sort arrows on all columns (indicates they're sortable)
+    // Show default sort arrows
     var ths = document.querySelectorAll('#data-table th .sort-arrow');
     for (var i = 0; i < ths.length; i++) {
         ths[i].textContent = '\\u25E5';
     }
 
-    // Apply filters to update the row count display
+    // Initial filter + render
     applyFilters();
 });
 </script>
@@ -1834,11 +1963,11 @@ def create_html_report(df, output_path):
     count_yes = int((df.get('Change Needed') == 'Yes').sum()) if 'Change Needed' in df.columns else 0
     count_review = int((df.get('Change Needed') == 'Review').sum()) if 'Change Needed' in df.columns else 0
     count_no = int((df.get('Change Needed') == 'No').sum()) if 'Change Needed' in df.columns else 0
-    institutions = sorted(df['Institution Name'].dropna().unique().tolist()) \
-                   if 'Institution Name' in df.columns else []
+    libraries = sorted(df['Library Name'].dropna().unique().tolist()) \
+                if 'Library Name' in df.columns else []
 
     # Filter to only records needing changes — the HTML report is for
-    # actionable items, not the full dataset. The Excel has everything.
+    # cataloger review, not the full dataset. The Excel has everything.
     df_changes = df[df['Change Needed'].isin(['Yes', 'Review'])].copy() \
                  if 'Change Needed' in df.columns else df.copy()
 
@@ -1846,7 +1975,7 @@ def create_html_report(df, output_path):
     records = []
     for _, row in df_changes.iterrows():
         records.append({
-            'institution': str(row.get('Institution Name', '')),
+            'library': str(row.get('Library Name', '')),
             'callNumber': str(row['Extracted Call Number'])
                           if pd.notna(row.get('Extracted Call Number')) else '',
             'currentInd': str(row.get('Current Indicator', '')),
@@ -1859,7 +1988,11 @@ def create_html_report(df, output_path):
             'notes': str(row['Notes'])
                      if pd.notna(row.get('Notes')) else '',
             'mmsId': str(row.get('MMS Id', '')),
+            'holdingsId': str(row.get('Holdings ID', '')),
+            'suppressed': str(row.get('Suppressed', '')),
             'primoCode': CUNY_PRIMO_CODES.get(str(row.get('Institution Name', '')), ''),
+            'scopeCode': PRIMO_SCOPE_CODES.get(
+                CUNY_PRIMO_CODES.get(str(row.get('Institution Name', '')), ''), ''),
         })
 
     json_data = json.dumps(records, ensure_ascii=False)
@@ -1875,7 +2008,7 @@ def create_html_report(df, output_path):
     html = html.replace('__COUNT_REVIEW__', f'{count_review:,}')
     html = html.replace('__COUNT_NO__', f'{count_no:,}')
     html = html.replace('__COUNT_CHANGES__', f'{len(records):,}')
-    html = html.replace('__COUNT_INSTITUTIONS__', str(len(institutions)))
+    html = html.replace('__COUNT_LIBRARIES__', str(len(libraries)))
 
     Path(output_path).write_text(html, encoding='utf-8')
     print(f"HTML report saved: {output_path}")
@@ -1911,24 +2044,32 @@ def main(input_path, output_path):
 
     # Ensure expected columns exist (fill missing ones with empty strings)
     for col in ['Permanent Call Number', 'Permanent Call Number Type', '852 MARC',
-                'Normalized Call Number', 'Institution Name', 'MMS Id',
-                'Holdings ID', 'Suppressed']:
+                'Normalized Call Number', 'Institution Name', 'Library Name',
+                'MMS Id', 'Holdings ID', 'Suppressed']:
         if col not in df.columns:
             df[col] = ''
-    
+
     # Clean up numeric institution codes. Analytics sometimes returns the
     # Alma IZ code (e.g., "6129") instead of the institution name.
     # Map known codes to names using the ALMA_IZ_CODES lookup table.
-    if 'Institution Name' in df.columns:
-        code_mask = df['Institution Name'].astype(str).isin(ALMA_IZ_CODES)
-        if code_mask.any():
-            count = code_mask.sum()
-            df.loc[code_mask, 'Institution Name'] = (
-                df.loc[code_mask, 'Institution Name']
-                .astype(str)
-                .map(ALMA_IZ_CODES)
-            )
-            print(f"  Mapped {count} IZ codes to institution names")
+    # This affects both Institution Name and Library Name columns.
+    for col in ['Institution Name', 'Library Name']:
+        if col in df.columns:
+            code_mask = df[col].astype(str).isin(ALMA_IZ_CODES)
+            if code_mask.any():
+                count = code_mask.sum()
+                df.loc[code_mask, col] = (
+                    df.loc[code_mask, col]
+                    .astype(str)
+                    .map(ALMA_IZ_CODES)
+                )
+                print(f"  Mapped {count} IZ codes to names in {col}")
+
+    # Normalize Suppressed column. Analytics returns 0/1 instead of Yes/No.
+    if 'Suppressed' in df.columns:
+        df['Suppressed'] = df['Suppressed'].astype(str).map(
+            {'1': 'Yes', '0': 'No', '1.0': 'Yes', '0.0': 'No'}
+        ).fillna(df['Suppressed'])
 
     print(f"Loaded {len(df)} records")
 
@@ -1948,6 +2089,13 @@ def main(input_path, output_path):
         return bool(sf.get('h') or sf.get('i') or sf.get('j'))
 
     df['Has CN Subfields'] = df['Parsed MARC'].apply(_has_cn_subfields)
+
+    # Drop records with no call number subfields ($h, $i, $j).
+    # These are holdings with only $a/$b/$c — nothing to analyze.
+    no_cn_count = (~df['Has CN Subfields']).sum()
+    if no_cn_count:
+        df = df[df['Has CN Subfields']].reset_index(drop=True)
+        print(f"  Excluded {no_cn_count} records with no call number subfields")
 
     df['Call Number for Analysis'] = df.apply(
         lambda row: row['Extracted Call Number'] if row['Extracted Call Number'] else row['Permanent Call Number'],
@@ -1969,16 +2117,6 @@ def main(input_path, output_path):
     subfield_changes = []
 
     for _, row in df.iterrows():
-        # If the 852 field has no $h, $i, or $j, there's no call number
-        # to classify — skip the analysis entirely.
-        if not row['Has CN Subfields']:
-            indicators.append('N/A')
-            class_types.append('No call number in field')
-            confidences.append('High')
-            notes.append('852 has no $h, $i, or $j')
-            subfield_changes.append('')
-            continue
-
         cn = row['Call Number for Analysis']
         from_j = row['From $j']
         j_combined = row['J Combined']
@@ -1990,7 +2128,20 @@ def main(input_path, output_path):
         class_types.append(result[1])
         confidences.append(result[2])
         notes.append(result[3])
-        subfield_changes.append(result[4])
+
+        # Check for trailing period on $h (misplaced cutter period)
+        sf_changes = result[4]
+        parsed = row.get('Parsed MARC')
+        if parsed:
+            sf = parsed.get('subfields', {})
+            raw_h = sf.get('h', '')
+            if raw_h.endswith('.') and sf.get('i', ''):
+                period_note = 'Move period from end of $h to start of $i'
+                if sf_changes:
+                    sf_changes = sf_changes + '; ' + period_note
+                else:
+                    sf_changes = period_note
+        subfield_changes.append(sf_changes)
 
     df['Suggested Indicator'] = indicators
     df['Classification Type'] = class_types

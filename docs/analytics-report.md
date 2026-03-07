@@ -10,6 +10,7 @@ Pulls all active holdings with 852 MARC data for call number analysis. Used by O
 |--------|-------------------|
 | BMCC | `/shared/Manhattan Community College 01CUNY_BM/Reports/852 Field Analysis - All Indicators` |
 | Kingsborough CC | `/shared/Kingsborough Community College 01CUNY_KB/Cataloging/852 Field Analysis - All Indicators` |
+| Queens College | `/shared/Queens College 01CUNY_QC/Reports/852 Field Analysis - All Indicators` |
 
 ## Subject area
 
@@ -27,6 +28,7 @@ Physical Items
 | 6 | Permanent Call Number | Physical Items > Holdings Details > Permanent Call Number |
 | 7 | Suppressed from Discovery | Physical Items > Holdings Details > Suppressed from Discovery |
 | 8 | Institution Name | Physical Items > Institution > Institution Name |
+| 9 | Library Name | Physical Items > Holdings Details > Library Name |
 
 ## Filters
 
