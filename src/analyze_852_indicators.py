@@ -978,7 +978,7 @@ def categorize_call_number(call_num, from_j=False, j_combined=False,
     if cn.upper().strip() in SHELVING_PREFIXES:
         prefix_word = cn.strip()
         return ('8', 'Other scheme', 'Low',
-                f"Prefix only — no classification follows. Could be shelving control (4) or other scheme (8)",
+                "Prefix only — no classification follows. Could be shelving control (4) or other scheme (8)",
                 f"Move '{prefix_word}' to $k")
 
     # === STRIP SHELVING PREFIXES ===
