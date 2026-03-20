@@ -13,10 +13,9 @@ Usage:
 
 Output: data/{school_code}_852_data_{timestamp}.xlsx (one file per school)
 
-Requires: api_keys.env in the project root with IZ API keys.
+Requires: .env in the project root with IZ API keys.
 """
 
-import os
 import sys
 import time
 from datetime import datetime
@@ -37,7 +36,7 @@ REPORT_PATHS = {
     'QC': '/shared/Queens College 01CUNY_QC/Reports/852 Field Analysis - All Indicators',
 }
 
-# Map school codes to their API key variable names in api_keys.env
+# Map school codes to their API key variable names in .env
 SCHOOL_KEY_MAP = {
     'BB': 'BB_IZ_API_KEY',
     'BM': 'BM_IZ_API_KEY',
@@ -336,11 +335,11 @@ def main():
         sys.exit(1)
 
     # Load API keys
-    env_path = PROJECT_ROOT / 'api_keys.env'
+    env_path = PROJECT_ROOT / '.env'
     config = load_env(env_path)
     if not config:
         print(f"Error: Could not load {env_path}")
-        print("Make sure api_keys.env exists in the project root.")
+        print("Make sure .env exists in the project root.")
         sys.exit(1)
 
     base_url = config.get('ALMA_API_BASE_URL', 'https://api-na.hosted.exlibrisgroup.com')
@@ -361,7 +360,7 @@ def main():
             schools = [s for s in schools if s != code]
         if code not in REPORT_PATHS:
             print(f"Error: No Analytics report path configured for {code}.")
-            print(f"Add the path to REPORT_PATHS in this script.")
+            print("Add the path to REPORT_PATHS in this script.")
             sys.exit(1)
 
     if not schools:

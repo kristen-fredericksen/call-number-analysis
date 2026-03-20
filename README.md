@@ -29,7 +29,7 @@ Schools are processed one at a time, starting with trusted cataloging department
 | `src/analyze_852_indicators.py` | Classifies call numbers, compares indicators, flags errors |
 | `SKILL.md` | Classification rules, decision tree, and reference material for Claude |
 | `docs/analytics-report.md` | Analytics report setup (columns, filters, paths per school) |
-| `api_keys.env` | IZ API keys per school (not in git) |
+| `.env` | IZ API keys per school (not in git) |
 
 ## Classification
 
@@ -58,7 +58,7 @@ pip install pandas openpyxl requests
 
 ### Pull data
 
-Each school needs an API key in `api_keys.env` and a report path in the script's `REPORT_PATHS` dict. See `docs/analytics-report.md` for report setup.
+Each school needs an API key in `.env` and a report path in the script's `REPORT_PATHS` dict. See `docs/analytics-report.md` for report setup.
 
 ```bash
 python src/pull_852_analytics.py KB           # Pull one school
